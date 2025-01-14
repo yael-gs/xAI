@@ -80,7 +80,7 @@ def batch_predict(images):
     probs = F.softmax(logits, dim=1)
     return probs.detach().cpu().numpy()
 
-def explain(img, idx2label):
+def explain(img, idx2label,showImage=False,saveImage=False):
     explainer = lime_image.LimeImageExplainer()
     pill_transf = get_pil_transform()
 
@@ -91,14 +91,20 @@ def explain(img, idx2label):
         hide_color=0,
         num_samples=1000,
     )
-    for label in explanation.top_labels:
-        temp, mask = explanation.get_image_and_mask(label, positive_only=False, num_features=10, hide_rest=False)
-        img_boundry = mark_boundaries(temp/255.0, mask)
-        plt.figure()
-        plt.title(f"LIME Explanation for: {idx2label[label]}")
-        plt.imshow(img_boundry)
-        plt.axis("off")
-    plt.show()
+    if showImage:
+        for label in explanation.top_labels:
+            temp, mask = explanation.get_image_and_mask(label, positive_only=False, num_features=10, hide_rest=False)
+            img_boundry = mark_boundaries(temp/255.0, mask)
+            plt.figure()
+            plt.title(f"LIME Explanation for: {idx2label[label]}")
+            plt.imshow(img_boundry)
+            plt.axis("off")
+        plt.show()
+    if saveImage:
+        for label in explanation.top_labels:
+            temp, mask = explanation.get_image_and_mask(label, positive_only=False, num_features=10, hide_rest=False)
+            img_boundry = mark_boundaries(temp/255.0, mask)
+            plt.imsave(f"LIME_{idx2label[label]}.png", img_boundry)
 
 if __name__ == "__main__":
     model = models.resnet50(pretrained=True)
@@ -122,4 +128,4 @@ if __name__ == "__main__":
     print("5 Predictions:")
     get_probabilities(img_t, idx2label)
 
-    explain(img, idx2label)
+    explain(img, idx2label,showImage=True,saveImage=True)
