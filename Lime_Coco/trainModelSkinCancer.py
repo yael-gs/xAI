@@ -5,20 +5,17 @@ from torch.utils.data import DataLoader
 from torchvision import models, transforms
 from datasets import load_dataset
 
-# Charger le dataset
 ds = load_dataset("marmal88/skin_cancer")
 train_dataset = load_dataset("marmal88/skin_cancer", split="train")
 valid_dataset = load_dataset("marmal88/skin_cancer", split="validation")
 test_dataset = load_dataset("marmal88/skin_cancer", split="test")
 
-# Transformation des images
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-# Dataset personnalisé
 class SkinCancerDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, transform=None):
         self.dataset = dataset
@@ -38,7 +35,6 @@ class SkinCancerDataset(torch.utils.data.Dataset):
         label = self.label_mapping[label]
         return image, label
 
-# Charger les datasets
 train_data = SkinCancerDataset(train_dataset, transform=transform)
 valid_data = SkinCancerDataset(valid_dataset, transform=transform)
 test_data = SkinCancerDataset(test_dataset, transform=transform)
@@ -47,7 +43,6 @@ train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
 valid_loader = DataLoader(valid_data, batch_size=32, shuffle=False)
 test_loader = DataLoader(test_data, batch_size=32, shuffle=False)
 
-# Définir le modèle
 num_classes = len(set(data['dx'] for data in train_dataset))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -58,7 +53,6 @@ model = model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-# Fonction d'entraînement
 def train(model, train_loader, valid_loader, criterion, optimizer, epochs=10):
     for epoch in range(epochs):
         model.train()
