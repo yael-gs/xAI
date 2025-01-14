@@ -1,0 +1,8 @@
+matplotlib
+Pillow
+torch
+torchvision
+lime
+numpy
+scikit-image
+requests
