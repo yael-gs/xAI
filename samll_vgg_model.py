@@ -26,7 +26,11 @@ class MyMultiLabelDataset(Dataset):
         # on clippe les valeurs 0/1 pour en faire un problème de classification
         self.label_cols = ["retinopathy_grade","risk_of_macular_edema"]
         self.df = pd.read_csv(csv_file)
-        self.df["retinopathy_grade"] = self.df["retinopathy_grade"].clip(0,1).astype("int8")
+        #self.df["retinopathy_grade"] = self.df["retinopathy_grade"].clip(0,1).astype("int8")
+        #self.df["risk_of_macular_edema"] = self.df["risk_of_macular_edema"].clip(0,1).astype("int8")
+        self.df.loc[self.df["risk_of_macular_edema"]  <=2 , "risk_of_macular_edema"] = 0
+        self.df.loc[self.df["retinopathy_grade"] > 2, "retinopathy_grade"] = 1
+
         self.df["risk_of_macular_edema"] = self.df["risk_of_macular_edema"].clip(0,1).astype("int8")
         self.img_dir = img_dir
         self.transform = transform
@@ -51,9 +55,9 @@ class MyMultiLabelDataset(Dataset):
 # Hypothèses
 # =====================
 num_labels = 2
-batch_size = 16
-num_epochs = 20
-lr = 1e-4
+batch_size = 8
+num_epochs = 3
+lr = 3e-5
 
 # Transforms
 import torchvision.transforms as T
@@ -109,18 +113,29 @@ if __name__ == '__main__':
         ax.set_yscale("log")
         fig.savefig("training_loss.png")
         plt.close()
-        
-        # Validation rapide
+
         model.eval()
         val_loss = 0.0
+        correct = 0
+        total = 0
+        
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item() * images.size(0)
+                
+                # Accuracy calculation for multi-label classification
+                predicted = torch.sigmoid(outputs) > 0.5  # Threshold predictions
+                total += labels.size(0) * labels.size(1)  # Total number of labels
+                correct += (predicted == labels).sum().item()
+
         val_loss /= len(test_dataset)
+        accuracy = 100 * correct / total
+
         print(f"Validation Loss: {val_loss:.4f}")
+        print(f"Validation Accuracy: {accuracy:.2f}%")
 
     torch.save(model.state_dict(), "multi_label_vgg16.pth")
     print("Fin de l'entraînement (multi-label) avec VGG16.")
