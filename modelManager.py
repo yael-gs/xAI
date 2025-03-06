@@ -108,6 +108,7 @@ class ModelManager:
 
 
     def inference(self, image, transform=None, returnData='probs'):
+        print("Inference")
         assert returnData in ['probs', 'logits'], "returnData must be 'probs' or 'logits'"
         self.model.eval()
         
@@ -115,12 +116,16 @@ class ModelManager:
         if image.dim() == 3:
             image = image.unsqueeze(0)  # Add batch dimension
             
+        if transform is not None:
+            image = transform(image)
         image = image.to(self.device)
 
         with torch.no_grad():
+            print('image device:', image.device)
+            print('model device:', next(self.model.parameters()).device)
             logits = self.model(image)
             probs = torch.sigmoid(logits)
-
+            
         probs_np = probs.cpu().numpy()
         if returnData == 'logits':
             return logits.cpu().numpy()
@@ -130,8 +135,11 @@ class ModelManager:
     def __del__(self):
         if hasattr(self, 'model'):
             if self.model is not None:
-                self.model = self.model.to('cpu')
-                del self.model
+                try:
+                    self.model = self.model.to('cpu')
+                    del self.model
+                except:
+                    pass
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

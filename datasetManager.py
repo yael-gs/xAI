@@ -4,7 +4,7 @@ import pandas as pd
 import torchvision.transforms as T
 import os 
 from PIL import Image
-
+import numpy as np
 
 class datasetManager:
     def __init__(self, dataset : int = 1, batch_size:int = 32, num_workers:int = 1, transform : T.Compose = None):
@@ -13,8 +13,13 @@ class datasetManager:
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+        #on ajoute le to Tensor pour les images
+        if transform is not None:
+            transform = T.Compose([transform, T.ToTensor()])
+        else:
+            transform = T.ToTensor()
         self.transform = transform
-        
+
         if self.dataset in [0,1,2]:
             if self.dataset == 0:
                 self.label_cols = ["retinopathy_grade", "risk_of_macular_edema"]
@@ -69,7 +74,7 @@ class datasetManager:
         )
         
     
-    def get_sample_by_class(self, n_samples=5, split='train', retinopathy_class=None, edema_class=None, return_original=False,return_labels=False):
+    def get_sample_by_class(self, n_samples=5, split='test', retinopathy_class=None, edema_class=None, return_labels=False, rawImage=False):
         assert split in ['train', 'test'], "Split must be 'train' or 'test'"
         df = self.dfTrain if split == 'train' else self.dfTest
         img_dir = self.train_img_dir if split == 'train' else self.test_img_dir
@@ -85,39 +90,40 @@ class datasetManager:
             
         sample_rows = filtered_df.sample(min(n_samples, len(filtered_df)))
         
-        result = []
+        images = []
+        retinopathy_labels = []
+        edema_labels = []
+        
         for _, row in sample_rows.iterrows():
             img_path = os.path.join(img_dir, (row['id'] + ".jpg"))
             image = Image.open(img_path).convert("RGB")
-            originalImage = image.copy()
-            # Get labels
             retinopathy_grade = "Severe" if row['retinopathy_grade'] == 1 else "Mild"
             edema_risk = "High" if row['risk_of_macular_edema'] == 1 else "Low"
             
-            # Process image for model if needed
-            model_image = image
-            if self.transform:
-                model_image = self.transform(model_image)
-            model_image = T.ToTensor()(model_image)
+            if not rawImage and self.transform:
+                image = self.transform(image)
+            elif rawImage:
+                image = np.array(image)
             
-            # Prepare return values based on parameters
-            if return_original and return_labels:
-                result.append((model_image, originalImage, retinopathy_grade, edema_risk))
-            elif return_original and not return_labels:
-                result.append((model_image, originalImage))
-            elif return_labels and not return_original:
-                result.append((model_image, retinopathy_grade, edema_risk))
-            else:
-                result.append(model_image)
-                
-        if not return_labels and not return_original:
-            result = torch.stack(result)
+            images.append(image)
+            
+            if return_labels:
+                retinopathy_labels.append(retinopathy_grade)
+                edema_labels.append(edema_risk)
+        
+        if not rawImage:
+            images = torch.stack(images)
+        
+        if return_labels:
+            result = (images, retinopathy_labels, edema_labels)
+        else:
+            result = images
+        
         return result
     
     def get_random_samples(self, n_samples=5,split='train'):
         return self.get_sample_by_class(split=split, n_samples=n_samples)
     
-
 
 class RetinopathyDataset(Dataset):
     def __init__(self, df, img_dir, label_cols, transform=None,encoding=False):
@@ -137,7 +143,6 @@ class RetinopathyDataset(Dataset):
         
         if self.transform:
             image = self.transform(image)
-        image = T.ToTensor()(image)
 
         if self.encoding: 
             labels = torch.zeros(2)
@@ -146,6 +151,10 @@ class RetinopathyDataset(Dataset):
             labels = torch.tensor(row[self.label_cols].values.astype('float32'))
         return image, labels
     
+
+
+
+
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -180,26 +189,31 @@ if __name__ == "__main__":
     print(f"Train dataset size: {len(dm.dfTrain)}")
     print(f"Test dataset size: {len(dm.dfTest)}")
     print(f"Batch shape: {images.shape}")
-
     print("\nTesting get_sample_by_class function:")
 
-    severe_samples = dm.get_sample_by_class(n_samples=2, retinopathy_class=1, return_labels=True)
+    # Get severe retinopathy samples with labels
+    samples = dm.get_sample_by_class(n_samples=2, retinopathy_class=1, return_labels=True)
+    images, retinopathy_labels, edema_labels = samples
+    
     plt.figure(figsize=(10, 5))
-    for i, (img, retinopathy, edema) in enumerate(severe_samples):
+    for i in range(len(images)):
         plt.subplot(1, 2, i+1)
-        plt.imshow(img.permute(1, 2, 0).numpy())
-        plt.title(f"Retinopathy: {retinopathy}\nEdema Risk: {edema}")
+        plt.imshow(images[i].permute(1, 2, 0).numpy())
+        plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
         plt.axis('off')
     plt.suptitle("Samples with Severe Retinopathy")
     plt.tight_layout()
     plt.show()
 
-    edema_samples = dm.get_sample_by_class(n_samples=2, edema_class=1, return_labels=True)
+    # Get high edema risk samples with labels
+    samples = dm.get_sample_by_class(n_samples=2, edema_class=1, return_labels=True)
+    images, retinopathy_labels, edema_labels = samples
+    
     plt.figure(figsize=(10, 5))
-    for i, (img, retinopathy, edema) in enumerate(edema_samples):
+    for i in range(len(images)):
         plt.subplot(1, 2, i+1)
-        plt.imshow(img.permute(1, 2, 0).numpy())
-        plt.title(f"Retinopathy: {retinopathy}\nEdema Risk: {edema}")
+        plt.imshow(images[i].permute(1, 2, 0).numpy())
+        plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
         plt.axis('off')
     plt.suptitle("Samples with High Edema Risk")
     plt.tight_layout()
@@ -208,9 +222,9 @@ if __name__ == "__main__":
     print("\nTesting get_random_samples function:")
     random_samples = dm.get_random_samples(n_samples=3)
     plt.figure(figsize=(15, 5))
-    for i, img in enumerate(random_samples):
+    for i in range(random_samples.shape[0]):
         plt.subplot(1, 3, i+1)
-        plt.imshow(img.permute(1, 2, 0).numpy())
+        plt.imshow(random_samples[i].permute(1, 2, 0).numpy())
         plt.title(f"Random Sample {i+1}")
         plt.axis('off')
     plt.suptitle("Random Samples")
