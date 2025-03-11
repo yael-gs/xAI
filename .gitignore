@@ -3,3 +3,5 @@ dataset.zip
 notebook-test.ipynb
 *.pyc
 .vscode*
+*.pth
+*.png

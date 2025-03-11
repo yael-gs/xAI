@@ -8,6 +8,7 @@ from modelManager import ModelManager
 from torchvision import transforms as T
 from skimage.segmentation import mark_boundaries
 import cv2
+from PIL import Image
 
 
 class MainExplainer:
@@ -36,27 +37,36 @@ class MainExplainer:
             return out
         images = input_imgs
         explainerObject = lime_image.LimeImageExplainer()
+        if isinstance(images, np.ndarray):
+            images_pil = Image.fromarray(np.uint8(images))
+            images = transformLime(images_pil)
+            images = images.numpy()
+            images = np.transpose(images, (1, 2, 0))
+        else:
+            images = transformLime(images)
+            images = images.numpy()
+            images = np.transpose(images, (1, 2, 0))
+        print('---------- Lime Explanation ----------')
+
         if segmentationModel.segmentationModelType == 'default':
-            if isinstance(images, np.ndarray):
-                from PIL import Image
-                images_pil = Image.fromarray(np.uint8(images))
-                images = transformLime(images_pil)
-                images = images.numpy()
-                images = np.transpose(images, (1, 2, 0))
-            else:
-                images = transformLime(images)
-                images = images.numpy()
-                images = np.transpose(images, (1, 2, 0))
-            print('---------- Lime Explanation ----------')
             explanation = explainerObject.explain_instance(
                 images,
                 classifier_fn,
-                top_labels=1,
+                top_labels=2,
                 hide_color=0,
                 num_samples=num_samples,
             )
         if segmentationModel.segmentationModelType == 'sam':
-            assert False, "Not implemented yet"
+             explanation = explainerObject.explain_instance(
+                images,
+                classifier_fn,
+                top_labels=2,
+                hide_color=0,
+                num_samples=num_samples,
+                segmentation_fn=segmentationModel.segmentationModel,
+            )
+
+
         self.explanation = explanation
         self.explanation_images = input_imgs
         return explanation
@@ -73,7 +83,7 @@ class MainExplainer:
             top_label = explanation.top_labels[0]
             temp, mask = explanation.get_image_and_mask(
                 label=top_label,
-                positive_only=True, 
+                positive_only=False, 
                 num_features=5,
                 hide_rest=False
             )
@@ -100,10 +110,31 @@ class MainExplainer:
 
     
 class segmentationWrapper:
-    def __init__(self, segmentationModelType):
+    def __init__(self, segmentationModelType, file=None,params={}):
+        assert segmentationModelType in ['sam', 'default'], "Segmentation model not supported"
         self.segmentationModelType = segmentationModelType
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         if segmentationModelType == 'sam':
-            self.segmentationModel = SamAutomaticMaskGenerator()
+            model_type = "vit_b"
+            assert file is not None, "File path needed for this segmentation model"
+            sam = sam_model_registry[model_type](checkpoint=file)
+            sam.to(device=self.device)
+            mask_generator = SamAutomaticMaskGenerator(
+                sam,
+                points_per_batch=params['points_per_batch'] if 'points_per_batch' in params else 32,
+                min_mask_region_area=params['min_mask_area'] if 'min_mask_area' in params else 60,
+            )
+            def sam_segmentation_fn(rgb_image: np.ndarray):
+                masks = mask_generator.generate(rgb_image)
+                seg_mask = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.int32)
+                for i, m in enumerate(masks):
+                    seg_mask[m['segmentation']] = i + 1
+                return seg_mask
+            
+            self.segmentationModel = sam_segmentation_fn
+            
         if segmentationModelType == 'default':
             self.segmentationModel = None
     
@@ -117,6 +148,7 @@ if __name__ == '__main__':
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
     model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
 
+    # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
     segmenter = segmentationWrapper('default')
     explainer = MainExplainer('lime')
     

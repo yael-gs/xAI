@@ -19,9 +19,9 @@ lr = 3e-5
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Images
-image_path = "/content/dataset/test/images/IDRiD_012.jpg"
-ground_truth_mask_path = "/content/dataset/test/segmentation/IDRiD_020.tif"
-ground_truth_label = pd.read_csv("/content/dataset/test/labels.csv")
+image_path = "dataset/test/images/IDRiD_012.jpg"
+ground_truth_mask_path = "dataset/test/segmentation/IDRiD_020.tif"
+ground_truth_label = pd.read_csv("dataset/test/labels.csv")
 ground_truth_label = ground_truth_label.loc[ground_truth_label['id'] == "IDRiD_020"]
 ground_truth_label = ground_truth_label[["retinopathy_grade", "risk_of_macular_edema"]]
 
