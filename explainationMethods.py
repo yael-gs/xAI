@@ -81,15 +81,41 @@ class MainExplainer:
             if original_image is None:
                 original_image = self.explanation_images
             top_label = explanation.top_labels[0]
-            temp, mask = explanation.get_image_and_mask(
+            # Get positive and negative masks separately
+            temp, positive_mask = explanation.get_image_and_mask(
                 label=top_label,
-                positive_only=False, 
+                positive_only=True,
+                num_features=5,
+                hide_rest=False
+            )
+            
+            temp, negative_mask = explanation.get_image_and_mask(
+                label=top_label,
+                positive_only=False,
+                negative_only=True, 
                 num_features=5,
                 hide_rest=False
             )
 
-            mask_resized = cv2.resize(mask.astype(np.uint8), (original_image.shape[1], original_image.shape[0]), interpolation=cv2.INTER_NEAREST)
-            img_with_boundaries = mark_boundaries(original_image, mask_resized, color=(0, 0, 1), mode='thick')
+            # Resize masks to match original image
+            positive_mask_resized = cv2.resize(positive_mask.astype(np.uint8), 
+                                             (original_image.shape[1], original_image.shape[0]), 
+                                             interpolation=cv2.INTER_NEAREST)
+            negative_mask_resized = cv2.resize(negative_mask.astype(np.uint8), 
+                                             (original_image.shape[1], original_image.shape[0]), 
+                                             interpolation=cv2.INTER_NEAREST)
+            
+            # Create overlay image
+            img_with_boundaries = np.copy(original_image).astype(np.float32) / 255
+            
+            # Add positive regions (green overlay)
+            img_with_boundaries[positive_mask_resized > 0] = img_with_boundaries[positive_mask_resized > 0] * 0.7 + np.array([0, 1, 0]) * 0.3
+            
+            # Add negative regions (red overlay)
+            img_with_boundaries[negative_mask_resized > 0] = img_with_boundaries[negative_mask_resized > 0] * 0.7 + np.array([1, 0, 0]) * 0.3
+            
+            # Make sure values are in valid range
+            img_with_boundaries = np.clip(img_with_boundaries, 0, 1)
 
             plt.figure(figsize=(12, 6))
             plt.subplot(1, 2, 1)
@@ -101,7 +127,7 @@ class MainExplainer:
             plt.imshow(img_with_boundaries)
             plt.title("LIME Explanation")
             plt.axis('off')
-
+            
             plt.tight_layout()
             plt.savefig("lime_explanation.png")
             plt.show()
@@ -123,9 +149,19 @@ class segmentationWrapper:
             sam.to(device=self.device)
             mask_generator = SamAutomaticMaskGenerator(
                 sam,
-                points_per_batch=params['points_per_batch'] if 'points_per_batch' in params else 32,
-                min_mask_region_area=params['min_mask_area'] if 'min_mask_area' in params else 60,
+                points_per_batch=10,
+                min_mask_region_area=params.get('min_mask_area', 5),
+                # pred_iou_thresh=params.get('pred_iou_thresh', 0.86),
+                crop_n_layers=params.get('crop_n_layers', 2),
+                crop_overlap_ratio=params.get('crop_overlap_ratio', 0.25),
+                # crop_n_points_downscale_factor=params.get('crop_n_points_downscale_factor', 2),
+                # point_grids=params.get('point_grids', None),
+                points_per_side=params.get('points_per_side', 32),
+                # stability_score_thresh=params.get('stability_score_thresh', 0.92),  # Higher for better segmentation
+                # box_nms_thresh=params.get('box_nms_thresh', 0.7)  # For better boundary separation
             )
+
+
             def sam_segmentation_fn(rgb_image: np.ndarray):
                 masks = mask_generator.generate(rgb_image)
                 seg_mask = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.int32)
@@ -147,9 +183,14 @@ if __name__ == '__main__':
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
     model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
+    samParams = {
+        'crop_n_layers': 2,
+        'crop_overlap_ratio': 0.25,
+        'points_per_side': 150
 
-    # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
-    segmenter = segmentationWrapper('default')
+    }
+    segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
+    # segmenter = segmentationWrapper('default')
     explainer = MainExplainer('lime')
     
     explanation = explainer.explain(
