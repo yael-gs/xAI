@@ -5,10 +5,10 @@ import torchvision.models as models
 from torchvision.models import VGG16_Weights, ResNet50_Weights, Swin_V2_B_Weights
 from torchvision import transforms as T
 from torch.utils.data import DataLoader
-from PIL import Image
 from torch import nn
 import datetime
 from tqdm import tqdm
+import numpy as np
 class ModelManager:
     def __init__(self, modelType, numClass, modelWeights=None):
         assert modelType in ['vgg16','resnet50','swinT'], "Model type not supported"
@@ -108,29 +108,41 @@ class ModelManager:
 
 
     def inference(self, image, transform=None, returnData='probs'):
-        print("Inference")
         assert returnData in ['probs', 'logits'], "returnData must be 'probs' or 'logits'"
         self.model.eval()
         
-        # Add batch dimension if it's missing (3D tensor -> 4D tensor)
-        if image.dim() == 3:
-            image = image.unsqueeze(0)  # Add batch dimension
-            
+        # Check if image is numpy array and convert to tensor if needed
+        if isinstance(image, np.ndarray):
+            # Handle numpy arrays - check dimensions
+            if image.ndim == 3:  # Single image with channels
+                image = torch.from_numpy(image).float()
+                # Ensure channels first format (C,H,W)
+                if image.shape[2] in [1, 3, 4]:  # If channels are last
+                    image = image.permute(2, 0, 1)
+                image = image.unsqueeze(0)  # Add batch dimension
+            elif image.ndim == 4:  # Batch of images
+                image = torch.from_numpy(image).float()
+                # Ensure channels first format (B,C,H,W)
+                if image.shape[3] in [1, 3, 4]:  # If channels are last
+                    image = image.permute(0, 3, 1, 2)
+        else:
+            # For PyTorch tensor
+            if image.dim() == 3:
+                image = image.unsqueeze(0)  # Add batch dimension
+                
         if transform is not None:
             image = transform(image)
+        
         image = image.to(self.device)
 
         with torch.no_grad():
-            print('image device:', image.device)
-            print('model device:', next(self.model.parameters()).device)
             logits = self.model(image)
             probs = torch.sigmoid(logits)
             
-        probs_np = probs.cpu().numpy()
         if returnData == 'logits':
             return logits.cpu().numpy()
         else:
-            return probs_np
+            return probs.cpu().numpy()
 
     def __del__(self):
         if hasattr(self, 'model'):
@@ -141,8 +153,9 @@ class ModelManager:
                 except:
                     pass
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if torch.cuda is not None:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
 
 

@@ -2,3 +2,4 @@ dataset/
 dataset.zip
 notebook-test.ipynb
 *.pyc
+.vscode*
