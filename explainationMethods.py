@@ -60,10 +60,9 @@ class MainExplainer:
 
     def _explain_shap(self, input_imgs, model, transformShap, segmentationModel, num_samples):
         def classifier_fn(input_batch):
-            output = model.inference(input_batch)  # (batch_size, classes) ou (batch_size, classes, H, W)
+            output = model.inference(input_batch)
 
             if output.ndim == 4:
-                # Si le modèle retourne (batch_size, classes, H, W), on moyenne spatialement
                 output = output.mean(axis=(2, 3))
             
             return output
@@ -174,7 +173,6 @@ class MainExplainer:
             h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
             plt.savefig(f"shap_explanation_{h}.png")
             
-        plt.tight_layout()
         plt.show()
 
     def _visualize_shap_segments(self, original_image, segment_values, class_name):

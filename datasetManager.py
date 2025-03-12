@@ -74,10 +74,16 @@ class datasetManager:
         )
         
     
-    def get_sample_by_class(self, n_samples=5, split='test', retinopathy_class=None, edema_class=None, return_labels=False, rawImage=False):
-        assert split in ['train', 'test'], "Split must be 'train' or 'test'"
+    def get_sample_by_class(self, n_samples=5, split='all', retinopathy_class=None, edema_class=None, return_labels=False, rawImage=False, retrun_id=False):
+        assert split in ['train', 'test','all'], "Split must be 'train' or 'test'"
         df = self.dfTrain if split == 'train' else self.dfTest
         img_dir = self.train_img_dir if split == 'train' else self.test_img_dir
+        if split == 'all':
+            df = pd.concat([self.dfTrain, self.dfTest], ignore_index=True)
+            indexTrain = [0]*len(self.dfTrain)
+            indexTest = [1]*len(self.dfTest)
+            df["split"] = indexTrain + indexTest
+            img_dir = "dataset"
         
         filtered_df = df.copy()
         if retinopathy_class is not None:
@@ -86,15 +92,19 @@ class datasetManager:
             filtered_df = filtered_df[filtered_df['risk_of_macular_edema'] == edema_class]
             
         if len(filtered_df) == 0:
+            Warning("No samples found for the given class")
             return []
             
         sample_rows = filtered_df.sample(min(n_samples, len(filtered_df)))
+        sample_rows = sample_rows.sample(frac=1)
         
         images = []
         retinopathy_labels = []
         edema_labels = []
         
         for _, row in sample_rows.iterrows():
+            if split == 'all':
+                img_dir = "dataset/train/images" if row["split"] == 0 else "dataset/test/images"
             img_path = os.path.join(img_dir, (row['id'] + ".jpg"))
             image = Image.open(img_path).convert("RGB")
             retinopathy_grade = "Severe" if row['retinopathy_grade'] == 1 else "Mild"
@@ -113,16 +123,28 @@ class datasetManager:
         
         if not rawImage:
             images = torch.stack(images)
-        
-        if return_labels:
+        if return_labels and not retrun_id:
             result = (images, retinopathy_labels, edema_labels)
         else:
             result = images
+        if return_labels and retrun_id:
+            result = (images, retinopathy_labels, edema_labels, sample_rows["id"].values)
         
         return result
     
-    def get_random_samples(self, n_samples=5,split='train'):
+    def get_random_samples(self, n_samples=5,split='all'):
         return self.get_sample_by_class(split=split, n_samples=n_samples)
+
+    def get_ground_segmentation(self, img_id):
+        img_dir = "dataset/test/segmentation"
+        img_path = os.path.join(img_dir, (img_id + ".tif"))
+        # TypeError: Invalid shape (3, 256, 256) for image data
+        image = Image.open(img_path)
+        image = self.transform(image)
+        image = image.numpy()
+        image = np.transpose(image, (1, 2, 0))
+        return image
+    
     
 
 class RetinopathyDataset(Dataset):
@@ -171,20 +193,20 @@ if __name__ == "__main__":
 
     images, labels = next(iter(train_loader))
 
-    plt.figure(figsize=(12, 6))
-    for i in range(min(4, len(images))):
-        img = images[i].permute(1, 2, 0).numpy()
+    # plt.figure(figsize=(12, 6))
+    # for i in range(min(4, len(images))):
+    #     img = images[i].permute(1, 2, 0).numpy()
         
-        retinopathy = "Severe" if labels[i][0] == 1 else "Mild"
-        edema_risk = "High" if labels[i][1] == 1 else "Low"
+    #     retinopathy = "Severe" if labels[i][0] == 1 else "Mild"
+    #     edema_risk = "High" if labels[i][1] == 1 else "Low"
         
-        plt.subplot(1, 4, i+1)
-        plt.imshow(img)
-        plt.title(f"Retinopathy: {retinopathy}\nEdema Risk: {edema_risk}")
-        plt.axis('off')
+    #     plt.subplot(1, 4, i+1)
+    #     plt.imshow(img)
+    #     plt.title(f"Retinopathy: {retinopathy}\nEdema Risk: {edema_risk}")
+    #     plt.axis('off')
 
-    plt.tight_layout()
-    plt.show()
+    # plt.tight_layout()
+    # plt.show()
 
     print(f"Train dataset size: {len(dm.dfTrain)}")
     print(f"Test dataset size: {len(dm.dfTest)}")
@@ -192,41 +214,51 @@ if __name__ == "__main__":
     print("\nTesting get_sample_by_class function:")
 
     # Get severe retinopathy samples with labels
-    samples = dm.get_sample_by_class(n_samples=2, retinopathy_class=1, return_labels=True)
-    images, retinopathy_labels, edema_labels = samples
+    # samples = dm.get_sample_by_class(n_samples=2, retinopathy_class=1, return_labels=True)
+    # images, retinopathy_labels, edema_labels = samples
     
-    plt.figure(figsize=(10, 5))
-    for i in range(len(images)):
-        plt.subplot(1, 2, i+1)
-        plt.imshow(images[i].permute(1, 2, 0).numpy())
-        plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
-        plt.axis('off')
-    plt.suptitle("Samples with Severe Retinopathy")
-    plt.tight_layout()
-    plt.show()
+    # plt.figure(figsize=(10, 5))
+    # for i in range(len(images)):
+    #     plt.subplot(1, 2, i+1)
+    #     plt.imshow(images[i].permute(1, 2, 0).numpy())
+    #     plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
+    #     plt.axis('off')
+    # plt.suptitle("Samples with Severe Retinopathy")
+    # plt.tight_layout()
+    # plt.show()
 
     # Get high edema risk samples with labels
-    samples = dm.get_sample_by_class(n_samples=2, edema_class=1, return_labels=True)
-    images, retinopathy_labels, edema_labels = samples
+    # samples = dm.get_sample_by_class(n_samples=2, edema_class=1, return_labels=True)
+    # images, retinopathy_labels, edema_labels = samples
     
-    plt.figure(figsize=(10, 5))
-    for i in range(len(images)):
-        plt.subplot(1, 2, i+1)
-        plt.imshow(images[i].permute(1, 2, 0).numpy())
-        plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
-        plt.axis('off')
-    plt.suptitle("Samples with High Edema Risk")
-    plt.tight_layout()
-    plt.show()
+    # plt.figure(figsize=(10, 5))
+    # for i in range(len(images)):
+    #     plt.subplot(1, 2, i+1)
+    #     plt.imshow(images[i].permute(1, 2, 0).numpy())
+    #     plt.title(f"Retinopathy: {retinopathy_labels[i]}\nEdema Risk: {edema_labels[i]}")
+    #     plt.axis('off')
+    # plt.suptitle("Samples with High Edema Risk")
+    # plt.tight_layout()
+    # plt.show()
 
-    print("\nTesting get_random_samples function:")
-    random_samples = dm.get_random_samples(n_samples=3)
+    # print("\nTesting get_random_samples function:")
+    # random_samples = dm.get_random_samples(n_samples=3)
+    # plt.figure(figsize=(15, 5))
+    # for i in range(random_samples.shape[0]):
+    #     plt.subplot(1, 3, i+1)
+    #     plt.imshow(random_samples[i].permute(1, 2, 0).numpy())
+    #     plt.title(f"Random Sample {i+1}")
+    #     plt.axis('off')
+    # plt.suptitle("Random Samples")
+    # plt.tight_layout()
+    # plt.show()
+
+    #on récupère une segmentation ground truth4
+    random_samples = dm.get_sample_by_class(n_samples=1, split='test', retinopathy_class=1, return_labels=True, rawImage=True, retrun_id=True)
+    print(random_samples)
     plt.figure(figsize=(15, 5))
-    for i in range(random_samples.shape[0]):
-        plt.subplot(1, 3, i+1)
-        plt.imshow(random_samples[i].permute(1, 2, 0).numpy())
-        plt.title(f"Random Sample {i+1}")
-        plt.axis('off')
-    plt.suptitle("Random Samples")
+        
+    plt.imshow(dm.get_ground_segmentation(random_samples[-1][0]))
+    plt.title(f"Segmentation ground truth")
     plt.tight_layout()
     plt.show()
