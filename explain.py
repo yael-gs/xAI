@@ -52,17 +52,19 @@ with st.sidebar:
     
     sam_params = {}
     if seg_method == "sam":
-        sam_file = st.text_input("SAM model path", "sam_vit_b_01ec64.pth")
+        #sam_file = st.text_input("SAM model path", "sam_vit_b_01ec64.pth")
+        sam_file = None
         
         with st.expander("Advanced SAM parameters"):
             sam_params['min_mask_region_area'] = st.slider("Min mask region area", 0, 20, 10)
             sam_params['pred_iou_thresh'] = st.slider("IoU threshold", 0.0, 1.0, 0.60, 0.05)
             sam_params['stability_score_thresh'] = st.slider("Stability threshold", 0.0, 1.0, 0.60, 0.05)
             sam_params['crop_n_layers'] = st.slider("Crop layers", 0, 3, 0)
+            sam_params['points_per_side'] = st.segmented_control("Points per side",[32, 64, 128], default=32)
             sam_params['crop_overlap_ratio'] = st.slider("Overlap ratio", 0.0, 1.0, 0.45, 0.05)
     
     st.subheader("Explanation Settings")
-    num_samples = st.slider("Number of samples", 10, 2000, 140)
+    num_samples = st.slider("Number of samples", 20, 2000, 140, step=20)
 
 @st.cache_resource
 def get_dataset_manager():

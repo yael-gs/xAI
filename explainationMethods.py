@@ -1,16 +1,18 @@
 import torch
 from lime import lime_image
-from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+#from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 import numpy as np
 from datasetManager import datasetManager
 from modelManager import ModelManager
 from torchvision import transforms as T
-from skimage.segmentation import mark_boundaries
+#from skimage.segmentation import mark_boundaries
 import cv2
 from PIL import Image
 import datetime
 import matplotlib.pyplot as plt
 import shap
+
 
 class SAMSegmentationMasker:
     def __init__(self, segmentation_fn, image):
@@ -305,27 +307,35 @@ class segmentationWrapper:
 
         if segmentationModelType == 'sam':
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            
+            #if we want to load from a file
+            #sam2_checkpoint = "../checkpoints/sam2.1_hiera_large.pt"
+            #model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+            #sam2 = build_sam2(model_cfg, sam2_checkpoint, device=self.device, apply_postprocessing=False)
 
-            model_type = "vit_b"
-            self.checkpoint = file
-            assert file is not None, "File path needed for this segmentation model"
-            sam = sam_model_registry[model_type](checkpoint=file)
-            sam.to(device=self.device)
+            # if we want to load for HGF
+            #model_type = "vit_b"
+            #self.checkpoint = file
+            #assert file is not None, "File path needed for this segmentation model"
+            #sam = sam_model_registry[model_type](checkpoint=file)
+            #sam.to(device=self.device)
             # sam.eval()
             default_sam_params = {
                 'min_mask_region_area': 0,               # ↓ Plus petites régions (défaut 0)
                 'pred_iou_thresh': 0.70,                  # ↓ Plus de régions conservées (défaut 0.88)
                 'stability_score_thresh': 0.80,           # ↓ Plus permissif (défaut 0.95)
-                'crop_n_layers': 1,                       # ↓ Moins de recadrage (défaut 0)
+                'crop_n_layers': 2,                       # ↓ Moins de recadrage (défaut 0)
                 'crop_overlap_ratio': 0.5,                # ↑ Meilleure couverture (défaut 0.3413)
                 'points_per_batch': 8,                   # ↑ Efficacité par batch (défaut 64)
                 'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
-                'box_nms_thresh': 0.8                     # ↑ Garde segments voisins (défaut 0.7)
+                'box_nms_thresh': 0.8,                     # ↑ Garde segments voisins (défaut 0.7)
+                'points_per_side':150
             }
             for key, value in params.items():
                 if key in default_sam_params:
                     default_sam_params[key] = value
             self.params = default_sam_params
+            """
             mask_generator = SamAutomaticMaskGenerator(
                 model=sam,
                 min_mask_region_area=default_sam_params['min_mask_region_area'],
@@ -337,7 +347,18 @@ class segmentationWrapper:
                 crop_n_points_downscale_factor=default_sam_params['crop_n_points_downscale_factor'],
                 box_nms_thresh=default_sam_params['box_nms_thresh']
             )
-
+            """
+            mask_generator = SAM2AutomaticMaskGenerator.from_pretrained('facebook/sam2-hiera-base-plus',
+                min_mask_region_area=default_sam_params['min_mask_region_area'],
+                pred_iou_thresh=default_sam_params['pred_iou_thresh'],
+                stability_score_thresh=default_sam_params['stability_score_thresh'],
+                crop_n_layers=default_sam_params['crop_n_layers'],
+                crop_overlap_ratio=default_sam_params['crop_overlap_ratio'],
+                points_per_batch=default_sam_params['points_per_batch'],
+                crop_n_points_downscale_factor=default_sam_params['crop_n_points_downscale_factor'],
+                box_nms_thresh=default_sam_params['box_nms_thresh'],
+                points_per_side = default_sam_params['points_per_side']
+            )
 
            
             def sam_segmentation_fn(rgb_image: np.ndarray):
@@ -369,47 +390,50 @@ if __name__ == '__main__':
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
-    model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
+    model_manager = ModelManager('swinT', 2, "swinT_model_2025-03-11_17-49_3.pth")
     # samParams = {
     #     'min_mask_area': 5,
     #     'crop_n_layers': 2,
     #     'crop_overlap_ratio': 0.25,
     #     'points_per_side': 150
     # }
+    
     samParams = {
         'min_mask_region_area': 4,               # ↓ Plus petites régions (défaut 0)
         'pred_iou_thresh': 0.60,                  # ↓ Plus de régions conservées (défaut 0.88)
         'stability_score_thresh': 0.80,           # ↓ Plus permissif (défaut 0.95)
-        'crop_n_layers': 1,                       # ↓ Moins de recadrage (défaut 0)
+        'crop_n_layers': 2,                       # ↓ Moins de recadrage (défaut 0)
         'crop_overlap_ratio': 0.45,                # ↑ Meilleure couverture (défaut 0.3413)
         'points_per_batch': 64,                   # ↑ Efficacité par batch (défaut 64)
         'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
         'box_nms_thresh': 0.8                     # ↑ Garde segments voisins (défaut 0.7)
     }
-    segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
+    
+    # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
     # segmenter = segmentationWrapper('default')
+    segmenter = segmentationWrapper('sam', None  , {})
     
     TStart = time.time()
 
-    # explainer = MainExplainer('lime')
-    # explanation = explainer.explain(
-    #     model_input,
-    #     model_manager,
-    #     dm,
-    #     segmenter,
-    # )
-    # explainer.show_explanation()
-
-
-    explainer = MainExplainer('shap')
+    explainer = MainExplainer('lime')
     explanation = explainer.explain(
         model_input,
         model_manager,
         dm,
         segmenter,
-        num_samples=60
     )
+    explainer.show_explanation()
+
+
+    # explainer = MainExplainer('shap')
+    # explanation = explainer.explain(
+    #     model_input,
+    #     model_manager,
+    #     dm,
+    #     segmenter,
+    #     num_samples=60
+    # )
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
