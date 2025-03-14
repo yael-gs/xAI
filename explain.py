@@ -11,6 +11,7 @@ from datasetManager import datasetManager
 from modelManager import ModelManager
 from explainationMethods import MainExplainer, segmentationWrapper
 from torchvision import transforms as T
+from quantus import Complexity, FaithfulnessCorrelation
 
 st.set_page_config(
     page_title="XAI Visualization Tool",

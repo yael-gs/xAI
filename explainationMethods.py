@@ -2,6 +2,7 @@ import torch
 from lime import lime_image
 #from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+from sam2.build_sam import build_sam2_hf
 import numpy as np
 from datasetManager import datasetManager
 from modelManager import ModelManager
@@ -12,7 +13,7 @@ from PIL import Image
 import datetime
 import matplotlib.pyplot as plt
 import shap
-
+from quantus.metrics import Complexity, FaithfulnessEstimate
 
 class SAMSegmentationMasker:
     def __init__(self, segmentation_fn, image):
@@ -59,6 +60,89 @@ class MainExplainer:
             self._show_explanation_lime(explanation, original_image, save)
         if self.explainationMethod == 'shap':
             self._show_explanation_shap(explanation, original_image, save)
+    
+    def _compute_complexity(self, input_imgs, explanation, label, model):
+
+        # 2. Extraction du masque d'attribution pour le label principal
+        top_label = explanation.top_labels[0]
+        _, positive_mask = explanation.get_image_and_mask(
+            label=top_label,
+            positive_only=True,
+            num_features=5,
+            hide_rest=False
+        )
+        
+        # Redimensionner le masque pour qu'il ait les dimensions de l'image d'origine
+        # Ici, on suppose que input_imgs est de forme (H, W, C)
+        positive_mask_resized = cv2.resize(
+            positive_mask.astype(np.uint8), 
+            (input_imgs.shape[1], input_imgs.shape[0]), 
+            interpolation=cv2.INTER_NEAREST
+        )
+        
+        # 3. Calculer le score de complexité avec Quantus
+        # Note : Quantus attend généralement des batches, ici on ajoute une dimension (batch size = 1)
+        x_batch = np.expand_dims(input_imgs, axis=0)
+        y_batch = np.array([label])  # Assurez-vous que 'label' correspond à la vraie étiquette de l'image
+        a_batch = np.expand_dims(positive_mask_resized, axis=0)
+        
+        complexity_metric = Complexity()
+        complexity_score = complexity_metric(
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+            a_batch=a_batch,
+            device=self.device
+        )
+        
+        print("Score de complexité :", complexity_score)
+        return complexity_score
+
+    def  _compute_faithfulness(self, input_imgs, explanation, label, model):
+
+        # 2. Extraction du masque d'attribution pour le label principal
+        top_label = explanation.top_labels[0]
+        _, positive_mask = explanation.get_image_and_mask(
+            label=top_label,
+            positive_only=True,
+            num_features=5,
+            hide_rest=False
+        )
+        
+        # Redimensionner le masque pour qu'il ait les dimensions de l'image d'origine
+        # Ici, on suppose que input_imgs est de forme (H, W, C)
+        positive_mask_resized = cv2.resize(
+            positive_mask.astype(np.uint8), 
+            (input_imgs.shape[1], input_imgs.shape[0]), 
+            interpolation=cv2.INTER_NEAREST
+        )
+        
+        
+        # 3. Calculer le score de faithfulness avec Quantus
+        # Note : Quantus attend généralement des batches, ici on ajoute une dimension (batch size = 1)
+        # faithfulnees atend channel first 
+        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0)
+        y_batch = np.array([label])  # Assurez-vous que 'label' correspond à la vraie étiquette de l'image
+        a_batch = np.expand_dims(positive_mask_resized, axis=0)
+        
+        # Instantiate the faithfulness metric.
+        faithfulness_metric = FaithfulnessEstimate()
+
+        # Compute the faithfulness score.
+        # Note: 'a_batch' should be your explanation attributions matching the input dimensions.
+        faithfulness_score = faithfulness_metric(
+            model=model,
+            x_batch=x_batch,
+            y_batch=y_batch,
+            a_batch=a_batch,
+            device=self.device,
+            # Optionally, if you want to re-compute explanations using a built-in function:
+            # explain_func=quantus.explain,
+            # explain_func_kwargs={"method": "Saliency"},
+        )
+
+        print("Faithfulness score:", faithfulness_score)
+        return faithfulness_score
 
     def _explain_shap(self, input_imgs, model, transformShap, segmentationModel, num_samples):
         def classifier_fn(input_batch):
@@ -203,12 +287,10 @@ class MainExplainer:
             plt.colorbar(label="SHAP value")
         else:
             plt.title("SHAP values (segments not available)")
-        
-        
-
-    def _explain_lime(self, input_imgs, model, transformLime, segmentationModel, num_samples):
+    
+    def _explain_lime(self, input_imgs, model_manager : ModelManager, transformLime, segmentationModel, num_samples):
         def classifier_fn(input_batch):
-            out = model.inference(input_batch)
+            out = model_manager.inference(input_batch)
             return out
         images = input_imgs
         explainerObject = lime_image.LimeImageExplainer()
@@ -239,13 +321,23 @@ class MainExplainer:
                 num_samples=num_samples,
                 segmentation_fn=segmentationModel.segmentationModel,
             )
+        
+        class ClassifierWrapper(torch.nn.Module):
+            def __init__(self, classifier_fn):
+                super(ClassifierWrapper, self).__init__()
+                self.classifier_fn = classifier_fn
 
+            def forward(self, x):
+                return self.classifier_fn(x)
+
+        top_label = explanation.top_labels[0]
+        complexity_score = self._compute_complexity(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
+        
+        #faithfulness_score = self._compute_faithfulness(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
+        
         self.explanation = explanation
         self.explanation_images = input_imgs
         return explanation
-    
-    
-
 
     def _show_explanation_lime(self, explanation=None, original_image=None, save=True):
         assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
@@ -295,10 +387,16 @@ class MainExplainer:
             plt.savefig(f"lime_explanation_{h}.png")
         plt.tight_layout()           
         plt.show()
-        return img_with_boundaries
         
+        return img_with_boundaries
 
-    
+
+
+# Exemple d'appel (à adapter selon votre contexte) :
+# complexity = compute_complexity(input_imgs, model, transformLime, segmentationModel, num_samples, label)
+
+
+
 class segmentationWrapper:
     def __init__(self, segmentationModelType, file=None,params={}):
         assert segmentationModelType in ['sam', 'default'], "Segmentation model not supported"
@@ -320,6 +418,18 @@ class segmentationWrapper:
             #sam = sam_model_registry[model_type](checkpoint=file)
             #sam.to(device=self.device)
             # sam.eval()
+            # mask_generator = SamAutomaticMaskGenerator(
+            #     model=sam,
+            #     min_mask_region_area=default_sam_params['min_mask_region_area'],
+            #     pred_iou_thresh=default_sam_params['pred_iou_thresh'],
+            #     stability_score_thresh=default_sam_params['stability_score_thresh'],
+            #     crop_n_layers=default_sam_params['crop_n_layers'],
+            #     crop_overlap_ratio=default_sam_params['crop_overlap_ratio'],
+            #     points_per_batch=default_sam_params['points_per_batch'],
+            #     crop_n_points_downscale_factor=default_sam_params['crop_n_points_downscale_factor'],
+            #     box_nms_thresh=default_sam_params['box_nms_thresh']
+            # )
+            
             default_sam_params = {
                 'min_mask_region_area': 0,               # ↓ Plus petites régions (défaut 0)
                 'pred_iou_thresh': 0.70,                  # ↓ Plus de régions conservées (défaut 0.88)
@@ -329,26 +439,15 @@ class segmentationWrapper:
                 'points_per_batch': 8,                   # ↑ Efficacité par batch (défaut 64)
                 'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
                 'box_nms_thresh': 0.8,                     # ↑ Garde segments voisins (défaut 0.7)
-                'points_per_side':150
+                'points_per_side':32
             }
             for key, value in params.items():
                 if key in default_sam_params:
                     default_sam_params[key] = value
             self.params = default_sam_params
-            """
-            mask_generator = SamAutomaticMaskGenerator(
-                model=sam,
-                min_mask_region_area=default_sam_params['min_mask_region_area'],
-                pred_iou_thresh=default_sam_params['pred_iou_thresh'],
-                stability_score_thresh=default_sam_params['stability_score_thresh'],
-                crop_n_layers=default_sam_params['crop_n_layers'],
-                crop_overlap_ratio=default_sam_params['crop_overlap_ratio'],
-                points_per_batch=default_sam_params['points_per_batch'],
-                crop_n_points_downscale_factor=default_sam_params['crop_n_points_downscale_factor'],
-                box_nms_thresh=default_sam_params['box_nms_thresh']
-            )
-            """
-            mask_generator = SAM2AutomaticMaskGenerator.from_pretrained('facebook/sam2-hiera-base-plus',
+            
+            sam_model = build_sam2_hf('facebook/sam2.1-hiera-small', device=self.device, apply_postprocessing=False)
+            mask_generator = SAM2AutomaticMaskGenerator(model=sam_model,
                 min_mask_region_area=default_sam_params['min_mask_region_area'],
                 pred_iou_thresh=default_sam_params['pred_iou_thresh'],
                 stability_score_thresh=default_sam_params['stability_score_thresh'],
@@ -359,8 +458,7 @@ class segmentationWrapper:
                 box_nms_thresh=default_sam_params['box_nms_thresh'],
                 points_per_side = default_sam_params['points_per_side']
             )
-
-           
+            
             def sam_segmentation_fn(rgb_image: np.ndarray):
                 if rgb_image.ndim == 2:
                     rgb_image = np.stack([rgb_image]*3, axis=-1)
@@ -375,6 +473,7 @@ class segmentationWrapper:
                 seg_mask = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.int32)
                 for i, m in enumerate(masks):
                     seg_mask[m['segmentation']] = i + 1
+                print("Segmentation prête")
                 return seg_mask
             
             self.segmentationModel = sam_segmentation_fn
@@ -390,7 +489,7 @@ if __name__ == '__main__':
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
-    model_manager = ModelManager('swinT', 2, "swinT_model_2025-03-11_17-49_3.pth")
+    model_manager = ModelManager('swinT', 2, "swinT_model_2025-03-06_13-35_3.pth")
     # samParams = {
     #     'min_mask_area': 5,
     #     'crop_n_layers': 2,
@@ -406,7 +505,8 @@ if __name__ == '__main__':
         'crop_overlap_ratio': 0.45,                # ↑ Meilleure couverture (défaut 0.3413)
         'points_per_batch': 64,                   # ↑ Efficacité par batch (défaut 64)
         'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
-        'box_nms_thresh': 0.8                     # ↑ Garde segments voisins (défaut 0.7)
+        'box_nms_thresh': 0.8,                     # ↑ Garde segments voisins (défaut 0.7)
+        'points_per_side': 128
     }
     
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
