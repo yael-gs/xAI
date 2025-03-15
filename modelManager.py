@@ -9,6 +9,8 @@ from torch import nn
 import datetime
 from tqdm import tqdm
 import numpy as np
+
+
 class ModelManager:
     def __init__(self, modelType, numClass, modelWeights=None):
         assert modelType in ['vgg16','resnet50','swinT'], "Model type not supported"
