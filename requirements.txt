@@ -12,3 +12,6 @@ lime
 shap
 segment-anything
 tqdm
+sam2
+quantus
+huggingface-hub
