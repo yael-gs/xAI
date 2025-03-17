@@ -17,7 +17,7 @@ Cuda compilation tools, release 12.6, V12.6.77 # "realease XX.X"
 ```
 Then you can install the good version of torch with the following command and you replace the cuXXX with the good version of cuda, for example for cuda 12.6 you will replace cuXXX by cu126 and for cuda 11.8 you will replace cuXXX by cu118:
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cuXXX #replace cuXXX by the good version of cuda
+pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cuXXX #replace cuXXX by the good version of cuda
 ```
 Then you can run GUI with : 
 ```bash 
