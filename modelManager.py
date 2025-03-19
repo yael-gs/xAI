@@ -109,7 +109,7 @@ class ModelManager:
         print(self.model)
 
 
-    def inference(self, image, transform=None, returnData='probs'):
+    def inference(self, image, transform=None, returnData='probs', metricsStyle = False):
         assert returnData in ['probs', 'logits'], "returnData must be 'probs' or 'logits'"
         self.model.eval()
         
@@ -128,9 +128,8 @@ class ModelManager:
                 if image.shape[3] in [1, 3, 4]:  # If channels are last
                     image = image.permute(0, 3, 1, 2)
         else:
-            # For PyTorch tensor
             if image.dim() == 3:
-                image = image.unsqueeze(0)  # Add batch dimension
+                image = image.unsqueeze(0)
                 
         if transform is not None:
             image = transform(image)
@@ -140,7 +139,10 @@ class ModelManager:
         with torch.no_grad():
             logits = self.model(image)
             probs = torch.sigmoid(logits)
-            
+
+        if metricsStyle:
+            return probs
+        
         if returnData == 'logits':
             return logits.cpu().numpy()
         else:

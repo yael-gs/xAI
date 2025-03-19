@@ -14,6 +14,7 @@ import datetime
 import matplotlib.pyplot as plt
 import shap
 from quantus.metrics import Complexity, FaithfulnessEstimate
+import quantus 
 
 class SAMSegmentationMasker:
     def __init__(self, segmentation_fn, image):
@@ -34,11 +35,12 @@ class SAMSegmentationMasker:
 
 
 class MainExplainer:
-    def __init__(self, explainationMethod):
+    def __init__(self, explainationMethod, metrics=['ROAD']):
         assert explainationMethod in ['lime','shap'], "Explaination method not supported"
         self.explainationMethod = explainationMethod
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+        self.metrics = metrics
+
     def explain(self, model_input, model_manager, datasetManagerObject, segmenter, num_samples=1000):
         if self.explainationMethod == 'lime':
             return self._explain_lime(model_input,
@@ -55,6 +57,7 @@ class MainExplainer:
                 num_samples=num_samples
             )
 
+    
     def show_explanation(self, explanation=None, original_image=None, save=True):
         if self.explainationMethod == 'lime':
             self._show_explanation_lime(explanation, original_image, save)
@@ -143,6 +146,80 @@ class MainExplainer:
 
         print("Faithfulness score:", faithfulness_score)
         return faithfulness_score
+    
+    def _verify_valid_metric(self, metric):
+        metricDict = {
+            'COMPLEXITY': Complexity,
+            'FAITHFULNESS': FaithfulnessEstimate,
+            'ROAD': quantus.ROAD
+        }
+        metricsParams = {
+            "ROAD": {
+                "noise":0.01,
+                "percentages":list(range(1, 50, 2)),
+                "display_progressbar":True
+            }
+        }
+        assert metric in metricDict, f"Metric {metric} not supported"
+        if metric is None:
+            return None, None
+        if metric in metricDict:
+            return metricDict[metric], metricsParams.get(metric, None)
+        return None, None
+    
+    def _compute_metrics(self, input_imgs, explanation, label, model, metrics : str | list[str] = ['ROAD']):
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        final_metric = {}
+
+        print("input_imgs.shape in _compute_metrics:", input_imgs.shape)
+        
+        top_label = explanation.top_labels[0]
+        _, positive_mask = explanation.get_image_and_mask(
+            label=top_label,
+            positive_only=False,
+            num_features=5,
+            hide_rest=False
+        )
+
+        positive_mask_resized = cv2.resize(
+            positive_mask.astype(np.uint8), 
+            (input_imgs.shape[1], input_imgs.shape[0]), 
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0)
+        y_batch = np.array([label])
+
+        a_batch = np.expand_dims(positive_mask_resized, axis=0)
+        a_batch = np.expand_dims(a_batch, axis=1)
+
+        # print("a_batch shape :", a_batch.shape)
+
+        for metric_name in metrics:
+            print('Running :', metric_name)
+            MetricClass, metric_params = self._verify_valid_metric(metric_name)
+            # print('MetricClass :', MetricClass)
+            # print('metric_params :', metric_params)
+
+            if metric_params is not None:
+                metric_instance = MetricClass(**metric_params)
+            else:
+                metric_instance = MetricClass()
+            
+            metric_score = metric_instance(
+                model=model,
+                x_batch=x_batch,
+                y_batch=y_batch,
+                a_batch=a_batch,
+                device=self.device,
+            )
+            final_metric[metric_name] = metric_score
+            print(f'Score {metric_name} : {metric_score}')
+
+        return final_metric
+        
+
 
     def _explain_shap(self, input_imgs, model, transformShap, segmentationModel, num_samples):
         def classifier_fn(input_batch):
@@ -326,13 +403,15 @@ class MainExplainer:
             def __init__(self, classifier_fn):
                 super(ClassifierWrapper, self).__init__()
                 self.classifier_fn = classifier_fn
+                self.eval()
 
             def forward(self, x):
-                return self.classifier_fn(x)
+                return self.classifier_fn(x, metricsStyle=True)
 
         top_label = explanation.top_labels[0]
-        complexity_score = self._compute_complexity(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
-        
+        # complexity_score = self._compute_complexity(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
+        metricsRes = self._compute_metrics(input_imgs=images, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label, metrics=self.metrics)
+        print(metricsRes)
         #faithfulness_score = self._compute_faithfulness(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
         
         self.explanation = explanation
@@ -401,11 +480,10 @@ class segmentationWrapper:
     def __init__(self, segmentationModelType, file=None,params={}):
         assert segmentationModelType in ['sam', 'default'], "Segmentation model not supported"
         self.segmentationModelType = segmentationModelType
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
         if segmentationModelType == 'sam':
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
             #if we want to load from a file
             #sam2_checkpoint = "../checkpoints/sam2.1_hiera_large.pt"
             #model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
@@ -431,14 +509,14 @@ class segmentationWrapper:
             # )
             
             default_sam_params = {
-                'min_mask_region_area': 0,               # ↓ Plus petites régions (défaut 0)
-                'pred_iou_thresh': 0.70,                  # ↓ Plus de régions conservées (défaut 0.88)
-                'stability_score_thresh': 0.80,           # ↓ Plus permissif (défaut 0.95)
-                'crop_n_layers': 2,                       # ↓ Moins de recadrage (défaut 0)
-                'crop_overlap_ratio': 0.5,                # ↑ Meilleure couverture (défaut 0.3413)
-                'points_per_batch': 8,                   # ↑ Efficacité par batch (défaut 64)
-                'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
-                'box_nms_thresh': 0.8,                     # ↑ Garde segments voisins (défaut 0.7)
+                'min_mask_region_area': 0,                  # ↓ Plus petites régions (défaut 0)
+                'pred_iou_thresh': 0.70,                    # ↓ Plus de régions conservées (défaut 0.88)
+                'stability_score_thresh': 0.80,             # ↓ Plus permissif (défaut 0.95)
+                'crop_n_layers': 2,                         # ↓ Moins de recadrage (défaut 0)
+                'crop_overlap_ratio': 0.5,                  # ↑ Meilleure couverture (défaut 0.3413)
+                'points_per_batch': 8,                      # ↑ Efficacité par batch (défaut 64)
+                'crop_n_points_downscale_factor': 1,        # = Garde résolution complète (défaut 1)
+                'box_nms_thresh': 0.8,                      # ↑ Garde segments voisins (défaut 0.7)
                 'points_per_side':32
             }
             for key, value in params.items():
@@ -446,7 +524,7 @@ class segmentationWrapper:
                     default_sam_params[key] = value
             self.params = default_sam_params
             
-            sam_model = build_sam2_hf('facebook/sam2.1-hiera-small', device=self.device, apply_postprocessing=False)
+            sam_model = build_sam2_hf('facebook/sam2.1-hiera-tiny', device=self.device, apply_postprocessing=False)
             mask_generator = SAM2AutomaticMaskGenerator(model=sam_model,
                 min_mask_region_area=default_sam_params['min_mask_region_area'],
                 pred_iou_thresh=default_sam_params['pred_iou_thresh'],
@@ -480,7 +558,6 @@ class segmentationWrapper:
 
         if segmentationModelType == 'default':
             self.segmentationModel = None
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def train(self):
         pass # Si on veut train la segmentation à un moment 
@@ -489,7 +566,7 @@ if __name__ == '__main__':
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
-    model_manager = ModelManager('swinT', 2, "swinT_model_2025-03-06_13-35_3.pth")
+    model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
     # samParams = {
     #     'min_mask_area': 5,
     #     'crop_n_layers': 2,
@@ -498,42 +575,36 @@ if __name__ == '__main__':
     # }
     
     samParams = {
-        'min_mask_region_area': 4,               # ↓ Plus petites régions (défaut 0)
-        'pred_iou_thresh': 0.60,                  # ↓ Plus de régions conservées (défaut 0.88)
-        'stability_score_thresh': 0.80,           # ↓ Plus permissif (défaut 0.95)
-        'crop_n_layers': 2,                       # ↓ Moins de recadrage (défaut 0)
-        'crop_overlap_ratio': 0.45,                # ↑ Meilleure couverture (défaut 0.3413)
-        'points_per_batch': 64,                   # ↑ Efficacité par batch (défaut 64)
-        'crop_n_points_downscale_factor': 1,      # = Garde résolution complète (défaut 1)
-        'box_nms_thresh': 0.8,                     # ↑ Garde segments voisins (défaut 0.7)
-        'points_per_side': 128
+        'min_mask_region_area': 4,                  # ↓ Plus petites régions (défaut 0)
+        'pred_iou_thresh': 0.60,                    # ↓ Plus de régions conservées (défaut 0.88)
+        'stability_score_thresh': 0.80,             # ↓ Plus permissif (défaut 0.95)
+        'crop_n_layers': 2,                         # ↓ Moins de recadrage (défaut 0)
+        'crop_overlap_ratio': 0.45,                 # ↑ Meilleure couverture (défaut 0.3413)
+        'points_per_batch': 8,                      # ↑ Efficacité par batch (défaut 64)
+        'crop_n_points_downscale_factor': 1,        # = Garde résolution complète (défaut 1)
+        'box_nms_thresh': 0.8,                      # ↑ Garde segments voisins (défaut 0.7)
+        'points_per_side': 12
     }
     
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
     # segmenter = segmentationWrapper('default')
-    segmenter = segmentationWrapper('sam', None  , {})
+    segmenter = segmentationWrapper('sam', None, {})
     
     TStart = time.time()
 
-    explainer = MainExplainer('lime')
+    explainer = MainExplainer('lime', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    # explainer = MainExplainer('shap')
+
     explanation = explainer.explain(
         model_input,
         model_manager,
         dm,
         segmenter,
+        num_samples=120
     )
     explainer.show_explanation()
 
-
-    # explainer = MainExplainer('shap')
-    # explanation = explainer.explain(
-    #     model_input,
-    #     model_manager,
-    #     dm,
-    #     segmenter,
-    #     num_samples=60
-    # )
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)

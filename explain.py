@@ -110,7 +110,7 @@ with tab1:
     with col2:
         num_images = st.slider("Number of images to display", 1, 10, 4)
     with col3:
-        select_split = st.selectbox("Select split", ["train", "test",'all'], index=2)
+        select_split = st.selectbox("Select split", ["train", "test", "all"], index=1)
 
     retinopathy_class = None
     if class_filter == "Mild":
