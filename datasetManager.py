@@ -168,7 +168,9 @@ class RetinopathyDataset(Dataset):
 
         if self.encoding: 
             labels = torch.zeros(2)
-            labels[row[self.label_cols]] = 1
+            #labels[row[self.label_cols]] = 1
+            index_for_label = int(row.loc[self.label_cols].iloc[0])
+            labels[index_for_label] = 1
         else:
             labels = torch.tensor(row[self.label_cols].values.astype('float32'))
         return image, labels

@@ -9,7 +9,8 @@ from torch import nn
 import datetime
 from tqdm import tqdm
 import numpy as np
-
+from sklearn.metrics import f1_score, recall_score
+import pandas as pd
 
 class ModelManager:
     def __init__(self, modelType, numClass, modelWeights=None):
@@ -105,6 +106,41 @@ class ModelManager:
         
         return correct / total if total > 0 else 0
 
+    def accuracy(self, loader, f1_recall=False):
+        self.model.eval()
+
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for images, labels in loader:
+                images, labels = images.to(self.device), labels.to(self.device)
+                outputs = self.model(images)
+                
+                # Since it's a binary classification task with a single output:
+                # Apply a sigmoid, then threshold at 0.5
+                predicted = (torch.sigmoid(outputs) > 0.5).float()
+                
+                # Collect predictions/labels in CPU lists
+                all_preds.extend(predicted.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+
+        # Convert to NumPy arrays
+        all_preds = np.array(all_preds).flatten()
+        all_labels = np.array(all_labels).flatten()
+
+        # Accuracy (simple mean over correct predictions)
+        accuracy = (all_preds == all_labels).mean()
+        
+        if f1_recall:
+            # F1 score and recall
+            f1 = f1_score(all_labels, all_preds, average='binary')
+            recall = recall_score(all_labels, all_preds, average='binary')
+
+            return accuracy, f1, recall
+        else :
+            return accuracy
+
     def show_model_parameters(self):
         print(self.model)
 
@@ -172,7 +208,7 @@ if __name__ == '__main__':
     # modelManager.show_model_parameters()
     # modelManager = ModelManager('swinT', 2)
     # modelManager.show_model_parameters()
-    
+
     datasetManagerOb = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     train_loader = datasetManagerOb.get_dataloader(split='train')
     test_loader = datasetManagerOb.get_dataloader(split='test')
@@ -192,12 +228,15 @@ if __name__ == '__main__':
 
     Lmodels = [('swinT_model_2025-03-06_13-35_3.pth',"swinT"),('resnet50_model_2025-03-06_13-31_3.pth','resnet50'),('vgg16_model_2025-03-06_13-28_3.pth','vgg16')]
     #on fait marcher l'inférence sur les 3 modèles
+    scoring_df = []
     for model in Lmodels:
         modelManager = ModelManager(model[1], numClass,model[0])
-        print(modelManager.accuracy(test_loader))
-        samples = datasetManagerOb.get_random_samples(3)
-        print(modelManager.inference(samples))
+        #print(modelManager.accuracy(test_loader, f1_recall=True))
+        acc, f1, recall = modelManager.accuracy(test_loader, f1_recall=True)
+        scoring_df.append((model[1], acc, f1, recall))
+        #samples = datasetManagerOb.get_random_samples(3)
+        #print(modelManager.inference(samples))
         del modelManager
-    
 
-    
+    scoring_df = pd.DataFrame(scoring_df, columns=['Model', 'Accuracy', 'F1 score', 'Recall score'])
+    print(scoring_df)
