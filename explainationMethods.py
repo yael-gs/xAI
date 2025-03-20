@@ -37,8 +37,8 @@ class SAMSegmentationMasker:
 
 
 class MainExplainer:
-    def __init__(self, explainationMethod, metrics=['ROAD']):
-        assert explainationMethod in ['lime','shap'], "Explaination method not supported"
+    def __init__(self, explainationMethod, metrics=[]):
+        assert explainationMethod in ['lime', 'shap'], "Explaination method not supported"
         self.explainationMethod = explainationMethod
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.metrics = metrics
@@ -104,73 +104,6 @@ class MainExplainer:
         return max_jaccard
         
 
-
-
-    def _show_explanation_shap(self, explanation=None, original_image=None, save=True):
-        assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
-        if explanation is None:
-            explanation = self.explanation
-        if original_image is None and hasattr(self, 'explanation_images'):
-            original_image = self.explanation_images
-        
-        if isinstance(explanation, ShapExplanationWrapper):
-            shap_values = explanation.shap_values
-        else:
-            shap_values = explanation
-            
-        
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)
-        plt.imshow(original_image)
-        plt.title("Original Image")
-        plt.axis('off')
-        plt.subplot(1, 2, 2)
-        if isinstance(explanation, ShapExplanationWrapper):
-            top_label = explanation.top_labels[0]
-            _, positive_mask = explanation.get_image_and_mask(
-                label=top_label, 
-                positive_only=True,
-                num_features=5,
-                hide_rest=False
-            )
-            
-            plt.imshow(original_image)
-            plt.imshow(positive_mask, cmap='hot', alpha=0.7)
-            plt.title(f"SHAP Explanation (top class: {top_label})")
-            
-        elif isinstance(shap_values, list) and len(shap_values) > 0:
-            class_idx = 1
-            class_name = "Severe"
-            if len(shap_values) > class_idx:
-                segment_values = shap_values[class_idx][0]
-                self._visualize_shap_segments(original_image, segment_values, class_name)
-        elif isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-            class_idx = 1
-            class_name = "Severe"
-            segment_values = shap_values[0, :, class_idx]
-            self._visualize_shap_segments(original_image, segment_values, class_name)
-        elif isinstance(shap_values, np.ndarray) and shap_values.ndim == 2:
-            plt.imshow(original_image)
-            max_abs_val = np.max(np.abs(shap_values)) if np.size(shap_values) > 0 else 1.0
-            if max_abs_val == 0:
-                max_abs_val = 1.0
-                
-            plt.imshow(shap_values, cmap='coolwarm', alpha=0.7, 
-                    vmin=-max_abs_val, vmax=max_abs_val)
-            plt.title("SHAP Explanation")
-        else:
-            plt.text(0.5, 0.5, "No valid SHAP explanation data", 
-                    horizontalalignment='center', verticalalignment='center',
-                    transform=plt.gca().transAxes)
-            plt.title("Visualization Error")
-        
-        plt.axis('off')
-            
-        if save:
-            h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
-            plt.savefig(f"shap_explanation_{h}.png")
-            
-        plt.show()
 
     def _verify_valid_metric(self, metric):
         metricDict = {
@@ -328,7 +261,7 @@ class MainExplainer:
             
             shap_values = explainer.shap_values(
                 np.ones((1, nb_segments)),
-                nsamples=min(num_samples, 200),
+                nsamples=min(num_samples, 1000),
             )
 
             if isinstance(shap_values, list):
@@ -372,46 +305,30 @@ class MainExplainer:
             explanation = self.explanation
         if original_image is None and hasattr(self, 'explanation_images'):
             original_image = self.explanation_images
-            
-        if isinstance(explanation, shap.Explanation):
-            shap.image_plot(explanation, show=False)
-        else:
-            plt.figure(figsize=(12, 6))
-            plt.subplot(1, 2, 1)
-            plt.imshow(original_image)
-            plt.title("Original Image")
-            plt.axis('off')
-            plt.subplot(1, 2, 2)
+        
 
-            if isinstance(explanation, list) and len(explanation) > 0:
-                class_idx = 1
-                class_name = "Severe"
-                if len(explanation) > class_idx:
-                    segment_values = explanation[class_idx][0]
-                    self._visualize_shap_segments(original_image, segment_values, class_name)
+        img, mask = explanation.get_image_and_mask(
+            label=1,
+            positive_only=True,
+            num_features=5,
+            hide_rest=False
+        )
+        
+        print("Mask shape:", mask.shape)
+        print("Image shape:", img.shape)
+        img = img[0]
 
-            elif isinstance(explanation, np.ndarray) and explanation.ndim == 3:
-                class_idx = 1
-                class_name = "Severe"
-                segment_values = explanation[0, :, class_idx]
-                self._visualize_shap_segments(original_image, segment_values, class_name)
-
-            elif isinstance(explanation, np.ndarray) and explanation.ndim == 2:
-                plt.imshow(original_image)
-                max_abs_val = np.max(np.abs(explanation)) if np.size(explanation) > 0 else 1.0
-                if max_abs_val == 0:
-                    max_abs_val = 1.0
-                    
-                plt.imshow(explanation, cmap='coolwarm', alpha=0.7, 
-                        vmin=-max_abs_val, vmax=max_abs_val)
-                plt.title("SHAP Explanation")
-            else:
-                plt.text(0.5, 0.5, "No valid SHAP explanation data", 
-                        horizontalalignment='center', verticalalignment='center',
-                        transform=plt.gca().transAxes)
-                plt.title("Visualization Error")
-            
-            plt.axis('off')
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.imshow(original_image)
+        plt.title("Original Image")
+        plt.axis('off')
+        plt.subplot(1, 2, 2)
+        plt.imshow(img)
+        plt.imshow(mask, cmap='hot', alpha=0.7)
+        plt.title("SHAP Explanation")
+        plt.legend()
+        plt.axis('off')
             
         if save:
             h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
@@ -767,6 +684,7 @@ if __name__ == '__main__':
     TStart = time.time()
 
     explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    # explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
     # explainer = MainExplainer('shap')
 
     explanation = explainer.explain(
@@ -776,11 +694,11 @@ if __name__ == '__main__':
         segmenter,
         num_samples=4000
     )
-    #explainer.show_explanation()
-    ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
-    print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
+    explainer.show_explanation()
+    # ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
+    # print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
     
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
-    explainer.show_explanation()
+    # explainer.show_explanation()

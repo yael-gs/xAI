@@ -61,7 +61,7 @@ with st.sidebar:
             sam_params['pred_iou_thresh'] = st.slider("IoU threshold", 0.0, 1.0, 0.60, 0.05)
             sam_params['stability_score_thresh'] = st.slider("Stability threshold", 0.0, 1.0, 0.60, 0.05)
             sam_params['crop_n_layers'] = st.slider("Crop layers", 0, 3, 0)
-            sam_params['points_per_side'] = st.segmented_control("Points per side",[32, 64, 128], default=32)
+            sam_params['points_per_side'] = st.segmented_control("Points per side",[16, 32, 64], default=16)
             sam_params['crop_overlap_ratio'] = st.slider("Overlap ratio", 0.0, 1.0, 0.45, 0.05)
     
     st.subheader("Explanation Settings")

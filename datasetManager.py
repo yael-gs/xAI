@@ -140,9 +140,9 @@ class datasetManager:
         img_path = os.path.join(img_dir, (img_id + ".tif"))
         # TypeError: Invalid shape (3, 256, 256) for image data
         image = Image.open(img_path)
-        if apply_transform :
+        if apply_transform:
             image = self.transform(image)
-        else :
+        else:
             image = T.Compose([T.ToTensor()])(image)
         image = image.numpy()
         image = np.transpose(image, (1, 2, 0))
