@@ -51,14 +51,14 @@ class MainExplainer:
                 segmenter,
                 num_samples=num_samples
             )
-        if self.explainationMethod == 'shap':
+        elif self.explainationMethod == 'shap':
             return self._explain_shap(model_input,
                 model_manager,
                 datasetManagerObject.transform,
                 segmenter,
                 num_samples=num_samples
             )
-        if self.explainationMethod == 'gradcam':
+        elif self.explainationMethod == 'gradcam':
             return self._explain_gradcam(model_input,
                 model_manager,
                 datasetManagerObject.transform,
@@ -67,9 +67,9 @@ class MainExplainer:
     def show_explanation(self, explanation=None, original_image=None, save=True):
         if self.explainationMethod == 'lime':
             self._show_explanation_lime(explanation, original_image, save)
-        if self.explainationMethod == 'shap':
+        elif self.explainationMethod == 'shap':
             self._show_explanation_shap(explanation, original_image, save)
-        if self.explainationMethod == 'gradcam':
+        elif self.explainationMethod == 'gradcam':
             self._show_explanation_gradcam(explanation, original_image, save)
             
     def _compute_jaccard(self, input_imgs, explanation, ground_truth_mask):
@@ -109,6 +109,8 @@ class MainExplainer:
 
         return max_jaccard
         
+
+
     def _verify_valid_metric(self, metric):
         metricDict = {
             'COMPLEXITY': Complexity,
@@ -118,15 +120,15 @@ class MainExplainer:
         }
         metricsParams = {
             "ROAD": {
-                "noise":0.01,
-                "percentages":list(range(1, 91, 10)),
+                "noise":0.07,
+                "percentages":list(range(1, 51, 1)),
                 "display_progressbar":True
             },
             'FAITHFULNESS' : {
                 'perturb_func' : quantus.uniform_noise
             }
         }
-        needGT = ['ROAD', 'AUC']
+        needGT = ['AUC'] #TODO Implémenter pour les segmentation Ground Truth
         assert metric in metricDict, f"Metric {metric} not supported"
         if metric is None:
             return None, None
@@ -139,63 +141,93 @@ class MainExplainer:
             metrics = [metrics]
         final_metric = {}
 
-        print("input_imgs.shape in _compute_metrics:", input_imgs.shape)
-        
-        top_label = explanation.top_labels[0]
+        # print("input_imgs.shape in _compute_metrics:", input_imgs.shape)
+        if self.explainationMethod == 'shap':
+            top_label = 1
+        else:
+            top_label = explanation.top_labels[0]
+
         _, positive_mask = explanation.get_image_and_mask(
             label=top_label,
             positive_only=True,
             num_features=5,
             hide_rest=False
         )
-
+        
+        # print("Positive mask shape:", positive_mask.shape)
+        assert positive_mask.ndim == 2, f"Expected 2D mask but got shape {positive_mask.shape}"
+        
+        if input_imgs.ndim == 4:
+            img_height = input_imgs.shape[1]
+            img_width = input_imgs.shape[2]
+        else:
+            img_height = input_imgs.shape[0]
+            img_width = input_imgs.shape[1]
+            input_imgs = np.expand_dims(input_imgs, axis=0)
+        
         positive_mask_resized = cv2.resize(
-            positive_mask.astype(np.uint8), 
-            (input_imgs.shape[1], input_imgs.shape[0]), 
+            positive_mask.astype(np.float64), 
+            (img_width, img_height), 
             interpolation=cv2.INTER_NEAREST
         )
+        
+        # print("Positive mask resized shape:", positive_mask_resized.shape)
+        # print("Final input_imgs shape:", input_imgs.shape)
 
-        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0) 
+        x_batch = np.transpose(input_imgs, (0, 3, 1, 2))
         y_batch = np.array([label])
-
         a_batch = np.expand_dims(positive_mask_resized, axis=0)
         a_batch = np.expand_dims(a_batch, axis=1)
-
-        print("a_batch shape :", a_batch.shape)
-        print("a_batch :", a_batch[0])
-
+        print(label)
+        # print('y_batch shape:', y_batch.shape)
+        # print('y_batch:', y_batch)
+        # print("x_batch shape:", x_batch.shape)  # Should be (1, 3, H, W)
+        # print("a_batch shape:", a_batch.shape)  # Should be (1, 1, H, W)
         for metric_name in metrics:
-            print('Running :', metric_name)
+            print('Running:', metric_name)
             MetricClass, metric_params = self._verify_valid_metric(metric_name)
-            # print('MetricClass :', MetricClass)
-            # print('metric_params :', metric_params)
 
             if metric_params is not None:
                 metric_instance = MetricClass(**metric_params)
             else:
                 metric_instance = MetricClass()
             
-            print(metric_params)
-            metric_score = metric_instance(
-                model=model,
-                x_batch=x_batch,
-                y_batch=y_batch,
-                a_batch=a_batch,
-                device=self.device
-            )
-            final_metric[metric_name] = metric_score
-            print(f'Score {metric_name} : {metric_score}')
+            try:
+                metric_score = metric_instance(
+                    model=model,
+                    x_batch=x_batch,
+                    y_batch=y_batch,
+                    a_batch=a_batch,
+                    device=self.device,
+                )
+                final_metric[metric_name] = metric_score
+                print(f'Score {metric_name}: {metric_score}')
+            except Exception as e:
+                print(f"Error computing metric {metric_name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                final_metric[metric_name] = None
 
         return final_metric
 
-    def _explain_shap(self, input_imgs, model, transformShap, segmentationModel, num_samples):
-        def classifier_fn(input_batch):
-            output = model.inference(input_batch)
 
+    def _explain_shap(self, input_imgs, model_manager, transformShap, segmentationModel, num_samples):
+        def classifier_fn(input_batch):
+            output = model_manager.inference(input_batch)
             if output.ndim == 4:
+                print('truc chelou')
                 output = output.mean(axis=(2, 3))
             
             return output
+        
+        class ClassifierWrapper(torch.nn.Module):
+            def __init__(self, classifier_fn):
+                super(ClassifierWrapper, self).__init__()
+                self.classifier_fn = classifier_fn
+                self.eval()
+
+            def forward(self, x):
+                return self.classifier_fn(x, metricsStyle=True)
         
         images = input_imgs
         if isinstance(images, np.ndarray):
@@ -208,29 +240,34 @@ class MainExplainer:
         images = np.transpose(images, (1, 2, 0))
         
         print('---------- Shap Explanation ----------')
+        shap_valuesf = None
+        explain_map = None
+        segments = None
+        
         if segmentationModel.segmentationModelType == 'default':
             images = np.expand_dims(images, axis=0)
             masker = shap.maskers.Image("blur(128,128)", images[0].shape)
             explainer = shap.Explainer(classifier_fn, masker, output_names=['Mild','Severe'])
-            shap_values = explainer(images, max_evals=num_samples, batch_size=8, outputs=shap.Explanation.argsort.flip[:4])
+            shap_valuesf = explainer(images, max_evals=num_samples, batch_size=8, outputs=shap.Explanation.argsort.flip[:4])
         
         if segmentationModel.segmentationModelType == 'sam':
             segmentation_fn = segmentationModel.segmentationModel
             masker = SAMSegmentationMasker(segmentation_fn, (images * 255).astype(np.uint8))
             nb_segments = masker.nb_segments
             print(f"Nombre de segments SAM détectés : {nb_segments}")
-
+            torch.cuda.empty_cache()
             explainer = shap.KernelExplainer(
                 lambda z: classifier_fn(masker.mask_image(z, images)),
                 np.zeros((1, nb_segments))
             )
             self._last_segments = masker.segments
+            segments = masker.segments
 
             class_to_explain = 1
             
             shap_values = explainer.shap_values(
                 np.ones((1, nb_segments)),
-                nsamples=num_samples
+                nsamples=min(num_samples, 1000),
             )
 
             if isinstance(shap_values, list):
@@ -244,11 +281,29 @@ class MainExplainer:
                 if hasattr(seg_value, '__len__') and len(seg_value) > 0:
                     seg_value = seg_value[0]
                 explain_map[masker.segments == (seg_idx + 1)] = seg_value
-
-        self.explanation = shap_values if shap_values is not None else explain_map
+        
+        wrapped_explanation = ShapExplanationWrapper(
+            shap_valuesf if shap_valuesf is not None else explain_map,
+            segments=segments,
+            original_image=images
+        )
+        
+        if self.metrics is not [] and self.metrics is not None:
+            top_label = wrapped_explanation.top_labels[0]
+            print(top_label)
+            metricsRes = self._compute_metrics(
+                input_imgs=images,
+                model=ClassifierWrapper(model_manager.inference),
+                explanation=wrapped_explanation,
+                label=1,
+                metrics=self.metrics
+            )
+            print(metricsRes)
+        
+        self.explanation = wrapped_explanation
         self.explanation_images = input_imgs
         
-        return shap_values if shap_values is not None else explain_map
+        return wrapped_explanation
 
     def _show_explanation_shap(self, explanation=None, original_image=None, save=True):
         assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
@@ -256,46 +311,30 @@ class MainExplainer:
             explanation = self.explanation
         if original_image is None and hasattr(self, 'explanation_images'):
             original_image = self.explanation_images
-            
-        if isinstance(explanation, shap.Explanation):
-            shap.image_plot(explanation, show=False)
-        else:
-            plt.figure(figsize=(12, 6))
-            plt.subplot(1, 2, 1)
-            plt.imshow(original_image)
-            plt.title("Original Image")
-            plt.axis('off')
-            plt.subplot(1, 2, 2)
+        
 
-            if isinstance(explanation, list) and len(explanation) > 0:
-                class_idx = 1
-                class_name = "Severe"
-                if len(explanation) > class_idx:
-                    segment_values = explanation[class_idx][0]
-                    self._visualize_shap_segments(original_image, segment_values, class_name)
+        img, mask = explanation.get_image_and_mask(
+            label=1,
+            positive_only=True,
+            num_features=5,
+            hide_rest=False
+        )
+        
+        print("Mask shape:", mask.shape)
+        print("Image shape:", img.shape)
+        img = img[0]
 
-            elif isinstance(explanation, np.ndarray) and explanation.ndim == 3:
-                class_idx = 1
-                class_name = "Severe"
-                segment_values = explanation[0, :, class_idx]
-                self._visualize_shap_segments(original_image, segment_values, class_name)
-
-            elif isinstance(explanation, np.ndarray) and explanation.ndim == 2:
-                plt.imshow(original_image)
-                max_abs_val = np.max(np.abs(explanation)) if np.size(explanation) > 0 else 1.0
-                if max_abs_val == 0:
-                    max_abs_val = 1.0
-                    
-                plt.imshow(explanation, cmap='coolwarm', alpha=0.7, 
-                        vmin=-max_abs_val, vmax=max_abs_val)
-                plt.title("SHAP Explanation")
-            else:
-                plt.text(0.5, 0.5, "No valid SHAP explanation data", 
-                        horizontalalignment='center', verticalalignment='center',
-                        transform=plt.gca().transAxes)
-                plt.title("Visualization Error")
-            
-            plt.axis('off')
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.imshow(original_image)
+        plt.title("Original Image")
+        plt.axis('off')
+        plt.subplot(1, 2, 2)
+        plt.imshow(img)
+        plt.imshow(mask, cmap='hot', alpha=0.7)
+        plt.title("SHAP Explanation")
+        plt.legend()
+        plt.axis('off')
             
         if save:
             h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
@@ -432,160 +471,7 @@ class MainExplainer:
         plt.show()
         
         return img_with_boundaries
-        
-    def _activations_hook(self, grad):
-        self.gradients = grad
 
-    def _explain_gradcam(self, input_imgs, model, transform):
-        images = input_imgs
-        if isinstance(images, np.ndarray):
-            images_pil = Image.fromarray(np.uint8(images))
-            images = transform(images_pil)
-            images = images.numpy()
-        else:
-            images = transform(images)
-            images = images.numpy()
-
-        images = np.transpose(images, (1, 2, 0))
-        images = np.expand_dims(images, axis=0)
-        image = images[0]
-
-        # Check if image is numpy array and convert to tensor if needed
-        if isinstance(image, np.ndarray):
-            # Handle numpy arrays - check dimensions
-            if image.ndim == 3:  # Single image with channels
-                image = torch.from_numpy(image).float()
-                # Ensure channels first format (C,H,W)
-                if image.shape[2] in [1, 3, 4]:  # If channels are last
-                    image = image.permute(2, 0, 1)
-                image = image.unsqueeze(0)  # Add batch dimension
-            elif image.ndim == 4:  # Batch of images
-                image = torch.from_numpy(image).float()
-                # Ensure channels first format (B,C,H,W)
-                if image.shape[3] in [1, 3, 4]:  # If channels are last
-                    image = image.permute(0, 3, 1, 2)
-        else:
-            # For PyTorch tensor
-            if image.dim() == 3:
-                image = image.unsqueeze(0)  # Add batch dimension
-
-        print('---------- Grad-CAM Explanation ----------')
-
-        image = image.to(self.device)
-
-        if model.modelType == "vgg16":
-            layers_before = [
-                model.model.features[:30]
-            ]
-
-            layers_after = [
-                model.model.features[30:],
-                model.model.avgpool,
-                lambda x: x.view((1, -1)),
-                model.model.classifier
-            ]
-
-        if model.modelType == "resnet50":
-            layers_before = [
-                model.model.conv1,
-                model.model.bn1,
-                model.model.maxpool,
-                model.model.layer1,
-                model.model.layer2,
-                model.model.layer3,
-                model.model.layer4
-            ]
-
-            layers_after = [
-                model.model.avgpool,
-                lambda x: x.view((1, -1)),
-                model.model.fc
-            ]
-
-        if model.modelType == "swinT":
-            layers_before = [
-                model.model.features,
-                model.model.norm,
-                model.model.permute
-            ]
-
-            layers_after = [
-                model.model.avgpool,
-                model.model.flatten,
-                model.model.head
-            ]
-
-        def forward(x):
-            for layer in layers_before: x = layer(x)
-
-            x.requires_grad_()
-            h = x.register_hook(self._activations_hook)
-
-            for layer in layers_after: x = layer(x)
-
-            return x
-
-        model.model.forward = forward
-
-        pred = model.model(image)
-        index = pred.argmax(dim=1)
-
-        pred[:, index].backward()
-        gradients = self.gradients
-
-        pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-
-        x = image
-        for layer in layers_before: x = layer(x)
-        activations = x.detach()
-
-        for i in range(activations.size(1)):
-            activations[:, i, :, :] *= pooled_gradients[i]
-
-        heatmap = torch.mean(activations, dim=1).squeeze()
-        heatmap = torch.tensor(np.maximum(heatmap.cpu().numpy(), 0))
-
-        # normalize the heatmap
-        heatmap /= torch.max(heatmap)
-
-        self.explanation = heatmap.squeeze()
-        self.explanation_images = input_imgs
-
-        return heatmap
-
-    def _show_explanation_gradcam(self, explanation=None, original_image=None, save=True):
-        assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
-        if explanation is None:
-            explanation = self.explanation
-        if original_image is None and hasattr(self, 'explanation_images'):
-            original_image = self.explanation_images
-
-        size = (original_image.shape[1], original_image.shape[0])
-        heatmap = cv2.resize(explanation.numpy(), size)
-        heatmap = np.uint8(255 * heatmap)
-        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_HOT)
-        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_RGB2BGR)
-
-        image = 0.4 * heatmap.astype(np.float32) + 0.6 * original_image.astype(np.float32)
-        image = np.round(image).astype(np.uint8)
-
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)
-        plt.imshow(original_image)
-        plt.title("Original Image")
-        plt.axis('off')
-
-        plt.subplot(1, 2, 2)
-        plt.imshow(image)
-        plt.title("Grad-CAM Explanation")
-        plt.axis('off')
-
-        if save:
-            h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
-            plt.savefig(f"shap_explanation_{h}.png")
-
-        plt.tight_layout()
-        plt.show()
 
 
 # Exemple d'appel (à adapter selon votre contexte) :
@@ -595,7 +481,7 @@ class MainExplainer:
 
 class segmentationWrapper:
     def __init__(self, segmentationModelType, file=None,params={}):
-        assert segmentationModelType in ['sam', 'default'], "Segmentation model not supported"
+        assert segmentationModelType in ['sam', 'default', 'grid'], "Segmentation model not supported"
         self.segmentationModelType = segmentationModelType
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -659,6 +545,10 @@ class segmentationWrapper:
                     rgb_image = np.stack([rgb_image]*3, axis=-1)
                 elif rgb_image.shape[2] == 1:
                     rgb_image = np.repeat(rgb_image, 3, axis=-1)
+
+                if rgb_image.dtype == np.float32 or rgb_image.dtype == np.float64: #TODO: Vérifier si ça améliore pour lime
+                    rgb_image = (rgb_image * 255).astype(np.uint8)
+
                
                 print("imagSize :",rgb_image.shape)
                 print("10*10 pixels au centre de l'image :",rgb_image[107:117,107:117])
@@ -675,9 +565,99 @@ class segmentationWrapper:
 
         if segmentationModelType == 'default':
             self.segmentationModel = None
+        
+
+        if segmentationModelType == 'grid':
+            def grid_segmentation_fn(rgb_image: np.ndarray, grid_size=(8, 8)):
+               
+                if rgb_image.ndim == 2:
+                    rgb_image = np.stack([rgb_image]*3, axis=-1)
+                elif rgb_image.shape[2] == 1:
+                    rgb_image = np.repeat(rgb_image, 3, axis=-1)
+                
+                height, width = rgb_image.shape[:2]
+                seg_mask = np.zeros((height, width), dtype=np.int32)
+                
+                cell_height = height // grid_size[0]
+                cell_width = width // grid_size[1]
+                
+                segment_id = 1
+                for i in range(grid_size[0]):
+                    for j in range(grid_size[1]):
+                        top = i * cell_height
+                        bottom = min((i + 1) * cell_height, height)
+                        left = j * cell_width
+                        right = min((j + 1) * cell_width, width)
+                        
+                        seg_mask[top:bottom, left:right] = segment_id
+                        segment_id += 1
+                
+                print(f"Grid segmentation created with {grid_size[0]}x{grid_size[1]} grid")
+                print(f"Total segments: {segment_id - 1}")
+                return seg_mask
+
+            grid_size = params.get('grid_size', (8, 8))
+            self.segmentationModel = lambda img: grid_segmentation_fn(img, grid_size)
 
     def train(self):
         pass # Si on veut train la segmentation à un moment 
+
+class ShapExplanationWrapper:
+    def __init__(self, shap_values, segments=None, class_names=None, original_image=None):
+        self.shap_values = shap_values
+        self.segments = segments
+        self.class_names = class_names or ["Mild", "Severe"]
+        self.original_image = original_image
+        
+        if isinstance(shap_values, shap.Explanation):
+            if len(shap_values.shape) > 2:
+                class_importance = np.sum(np.abs(shap_values.values), axis=(1, 2))
+                self.top_labels = np.argsort(-class_importance)[0:2]
+            else:
+                self.top_labels = [0, 1]
+        elif isinstance(shap_values, list):
+            self.top_labels = list(range(min(2, len(shap_values))))
+        else:
+            self.top_labels = [1, 0]
+
+    def get_image_and_mask(self, label=1, positive_only=True, negative_only=False, num_features=5, hide_rest=False):
+        print(f"SHAP values type: {type(self.shap_values)}")
+        if isinstance(self.shap_values, np.ndarray):
+            if np.all(self.shap_values == 0):
+                print("All SHAP values are zero")
+                return self.original_image, np.zeros((224, 224))
+                
+        if isinstance(self.shap_values, shap.Explanation):
+            shap_arr = np.array(self.shap_values.values)  # ex. forme (1,224,224,3,2)
+            
+            if shap_arr.ndim == 5 and shap_arr.shape[:3] == (1, 224, 224):
+                if label < shap_arr.shape[-1]:
+                    label_values = shap_arr[..., label]  
+                    shap_map = np.sum(label_values, axis=-1)
+                    shap_map = shap_map[0]
+                else:
+                    print(f"Label {label} hors limite. Retour d'un masque nul.")
+                    shap_map = np.zeros((224, 224))
+            else:
+                shap_map = shap_arr
+                if shap_map.ndim > 2:
+                    print(f"Forme inattendue {shap_map.shape}, on la réduit en 2D par sum.")
+                    shap_map = shap_map.sum(axis=tuple(range(shap_map.ndim - 2)))
+        else:
+            if isinstance(self.shap_values, np.ndarray):
+                shap_map = self.shap_values
+            else:
+                shap_map = np.zeros((224, 224))
+
+        if shap_map.shape != (224, 224):
+            print(f"Forme finale inattendue: {shap_map.shape}. On redimensionne en (224,224) si possible...")
+            try:
+                shap_map = shap_map.reshape((224, 224))
+            except:
+                shap_map = np.zeros((224, 224))
+        # plt.imshow(shap_map) # To Show the SHAP values only
+        # plt.show()
+        return self.original_image, shap_map
 
 if __name__ == '__main__':
     import time
@@ -709,8 +689,8 @@ if __name__ == '__main__':
     
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
-    segmenter = segmentationWrapper('default')
-    # segmenter = segmentationWrapper('sam', None, {})
+    # segmenter = segmentationWrapper('default')
+    segmenter = segmentationWrapper('sam', None, {})
     
     TStart = time.time()
 
@@ -723,13 +703,13 @@ if __name__ == '__main__':
         model_manager,
         dm,
         segmenter,
-        num_samples=1000
+        num_samples=4000
     )
-    #explainer.show_explanation()
-    ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
-    print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
+    explainer.show_explanation()
+    # ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
+    # print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
     
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
-    explainer.show_explanation()
+    # explainer.show_explanation()
