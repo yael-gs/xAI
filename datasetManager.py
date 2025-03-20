@@ -135,12 +135,15 @@ class datasetManager:
     def get_random_samples(self, n_samples=5,split='all'):
         return self.get_sample_by_class(split=split, n_samples=n_samples)
 
-    def get_ground_segmentation(self, img_id):
+    def get_ground_segmentation(self, img_id, apply_transform =True):
         img_dir = "dataset/test/segmentation"
         img_path = os.path.join(img_dir, (img_id + ".tif"))
         # TypeError: Invalid shape (3, 256, 256) for image data
         image = Image.open(img_path)
-        image = self.transform(image)
+        if apply_transform :
+            image = self.transform(image)
+        else :
+            image = T.Compose([T.ToTensor()])(image)
         image = image.numpy()
         image = np.transpose(image, (1, 2, 0))
         return image
@@ -185,7 +188,7 @@ if __name__ == "__main__":
     import torchvision.transforms as T
 
     transform = T.Compose([
-        T.Resize((256, 256)),
+        T.Resize((224, 224)),
     ])
 
     dm = datasetManager(dataset=0, batch_size=4, transform=transform)
@@ -258,9 +261,12 @@ if __name__ == "__main__":
     #on récupère une segmentation ground truth4
     random_samples = dm.get_sample_by_class(n_samples=1, split='test', retinopathy_class=1, return_labels=True, rawImage=True, retrun_id=True)
     print(random_samples)
+    ground_truth_mask = dm.get_ground_segmentation(random_samples[-1][0])
+    unique_labels = np.unique(ground_truth_mask.reshape(-1, ground_truth_mask.shape[2]), axis=0)
+    print(len(unique_labels))
     plt.figure(figsize=(15, 5))
-        
-    plt.imshow(dm.get_ground_segmentation(random_samples[-1][0]))
+    
+    plt.imshow(ground_truth_mask)
     plt.title(f"Segmentation ground truth")
     plt.tight_layout()
     plt.show()

@@ -14,7 +14,9 @@ import datetime
 import matplotlib.pyplot as plt
 import shap
 from quantus.metrics import Complexity, FaithfulnessEstimate
-import quantus 
+import quantus
+from sklearn.metrics import jaccard_score
+from itertools import combinations
 
 class SAMSegmentationMasker:
     def __init__(self, segmentation_fn, image):
@@ -63,6 +65,44 @@ class MainExplainer:
             self._show_explanation_lime(explanation, original_image, save)
         if self.explainationMethod == 'shap':
             self._show_explanation_shap(explanation, original_image, save)
+            
+    def _compute_jaccard(self, input_imgs, explanation, ground_truth_mask):
+        top_label = explanation.top_labels[0]
+        _, positive_mask = explanation.get_image_and_mask(
+            label=top_label,
+            positive_only=True,
+            num_features=5,
+            hide_rest=False
+        )
+        
+        positive_mask_resized = cv2.resize(
+            positive_mask.astype(np.uint8), 
+            (input_imgs.shape[1], input_imgs.shape[0]), 
+            interpolation=cv2.INTER_NEAREST
+        )
+        
+        # Extract unique labels from the ground truth mask (assumes shape is (H, W, 3))
+        unique_labels = np.unique(ground_truth_mask.reshape(-1, ground_truth_mask.shape[2]), axis=0)
+        
+        # Precompute binary masks for each unique label only once
+        masks = [np.all(ground_truth_mask == lbl, axis=-1) for lbl in unique_labels]
+        
+        max_jaccard = 0.0
+        
+        # Iterate over all non-empty combinations of precomputed masks
+        for r in range(1, len(unique_labels) + 1):
+            for combo in combinations(range(len(unique_labels)), r):
+                # Combine the masks corresponding to the indices in the current combination
+                union_mask = np.any(np.stack([masks[i] for i in combo], axis=0), axis=0)
+                
+                # Compute the Jaccard score (flattening the arrays for comparison)
+                jaccard = jaccard_score(positive_mask_resized.flatten(), union_mask.flatten(), average='binary')
+                
+                if jaccard > max_jaccard:
+                    max_jaccard = jaccard
+
+        return max_jaccard
+        
 
 
 
@@ -145,8 +185,8 @@ class MainExplainer:
                 "percentages":list(range(1, 51, 1)),
                 "display_progressbar":True
             },
-            "FAITHFULNESS": {
-                "perturb_func": quantus.uniform_noise
+            'FAITHFULNESS' : {
+                'perturb_func' : quantus.uniform_noise
             }
         }
         needGT = ['AUC'] #TODO Implémenter pour les segmentation Ground Truth
@@ -694,7 +734,11 @@ class ShapExplanationWrapper:
 if __name__ == '__main__':
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
-    model_input = dm.get_sample_by_class(n_samples=1, rawImage=True)[0]
+    model_input = dm.get_sample_by_class(n_samples=1, rawImage=True, retrun_id=True, return_labels=True, split='test')
+    image_id = model_input[-1]
+    image_id = image_id[0]
+    print("Image ID : ",image_id)
+    model_input = model_input[0][0]
     model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
     # samParams = {
     #     'min_mask_area': 5,
@@ -732,8 +776,10 @@ if __name__ == '__main__':
         segmenter,
         num_samples=4000
     )
-    explainer.show_explanation()
-
+    #explainer.show_explanation()
+    ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
+    print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
+    
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
