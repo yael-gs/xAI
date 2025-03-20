@@ -5,3 +5,4 @@ notebook-test.ipynb
 .vscode*
 *.pth
 *.png
+*.pt

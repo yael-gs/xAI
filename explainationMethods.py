@@ -64,102 +64,21 @@ class MainExplainer:
         if self.explainationMethod == 'shap':
             self._show_explanation_shap(explanation, original_image, save)
     
-    def _compute_complexity(self, input_imgs, explanation, label, model):
-
-        # 2. Extraction du masque d'attribution pour le label principal
-        top_label = explanation.top_labels[0]
-        _, positive_mask = explanation.get_image_and_mask(
-            label=top_label,
-            positive_only=True,
-            num_features=5,
-            hide_rest=False
-        )
-        
-        # Redimensionner le masque pour qu'il ait les dimensions de l'image d'origine
-        # Ici, on suppose que input_imgs est de forme (H, W, C)
-        positive_mask_resized = cv2.resize(
-            positive_mask.astype(np.uint8), 
-            (input_imgs.shape[1], input_imgs.shape[0]), 
-            interpolation=cv2.INTER_NEAREST
-        )
-        
-        # 3. Calculer le score de complexité avec Quantus
-        # Note : Quantus attend généralement des batches, ici on ajoute une dimension (batch size = 1)
-        x_batch = np.expand_dims(input_imgs, axis=0)
-        y_batch = np.array([label])  # Assurez-vous que 'label' correspond à la vraie étiquette de l'image
-        a_batch = np.expand_dims(positive_mask_resized, axis=0)
-        
-        complexity_metric = Complexity()
-        complexity_score = complexity_metric(
-            model=model,
-            x_batch=x_batch,
-            y_batch=y_batch,
-            a_batch=a_batch,
-            device=self.device
-        )
-        
-        print("Score de complexité :", complexity_score)
-        return complexity_score
-
-    def  _compute_faithfulness(self, input_imgs, explanation, label, model):
-
-        # 2. Extraction du masque d'attribution pour le label principal
-        top_label = explanation.top_labels[0]
-        _, positive_mask = explanation.get_image_and_mask(
-            label=top_label,
-            positive_only=True,
-            num_features=5,
-            hide_rest=False
-        )
-        
-        # Redimensionner le masque pour qu'il ait les dimensions de l'image d'origine
-        # Ici, on suppose que input_imgs est de forme (H, W, C)
-        positive_mask_resized = cv2.resize(
-            positive_mask.astype(np.uint8), 
-            (input_imgs.shape[1], input_imgs.shape[0]), 
-            interpolation=cv2.INTER_NEAREST
-        )
-        
-        
-        # 3. Calculer le score de faithfulness avec Quantus
-        # Note : Quantus attend généralement des batches, ici on ajoute une dimension (batch size = 1)
-        # faithfulnees atend channel first 
-        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0)
-        y_batch = np.array([label])  # Assurez-vous que 'label' correspond à la vraie étiquette de l'image
-        a_batch = np.expand_dims(positive_mask_resized, axis=0)
-        
-        # Instantiate the faithfulness metric.
-        faithfulness_metric = FaithfulnessEstimate()
-
-        # Compute the faithfulness score.
-        # Note: 'a_batch' should be your explanation attributions matching the input dimensions.
-        faithfulness_score = faithfulness_metric(
-            model=model,
-            x_batch=x_batch,
-            y_batch=y_batch,
-            a_batch=a_batch,
-            device=self.device,
-            # Optionally, if you want to re-compute explanations using a built-in function:
-            # explain_func=quantus.explain,
-            # explain_func_kwargs={"method": "Saliency"},
-        )
-
-        print("Faithfulness score:", faithfulness_score)
-        return faithfulness_score
-    
     def _verify_valid_metric(self, metric):
         metricDict = {
             'COMPLEXITY': Complexity,
             'FAITHFULNESS': FaithfulnessEstimate,
-            'ROAD': quantus.ROAD
+            'ROAD': quantus.ROAD,
+            'AUC': quantus.AUC
         }
         metricsParams = {
             "ROAD": {
                 "noise":0.01,
-                "percentages":list(range(1, 50, 2)),
+                "percentages":list(range(1, 91, 10)),
                 "display_progressbar":True
             }
         }
+        needGT = ['ROAD', 'AUC']
         assert metric in metricDict, f"Metric {metric} not supported"
         if metric is None:
             return None, None
@@ -177,7 +96,7 @@ class MainExplainer:
         top_label = explanation.top_labels[0]
         _, positive_mask = explanation.get_image_and_mask(
             label=top_label,
-            positive_only=False,
+            positive_only=True,
             num_features=5,
             hide_rest=False
         )
@@ -188,13 +107,14 @@ class MainExplainer:
             interpolation=cv2.INTER_NEAREST
         )
 
-        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0)
+        x_batch = np.expand_dims(np.transpose(input_imgs, (2, 0, 1)), axis=0) 
         y_batch = np.array([label])
 
         a_batch = np.expand_dims(positive_mask_resized, axis=0)
         a_batch = np.expand_dims(a_batch, axis=1)
 
-        # print("a_batch shape :", a_batch.shape)
+        print("a_batch shape :", a_batch.shape)
+        print("a_batch :", a_batch[0])
 
         for metric_name in metrics:
             print('Running :', metric_name)
@@ -409,10 +329,9 @@ class MainExplainer:
                 return self.classifier_fn(x, metricsStyle=True)
 
         top_label = explanation.top_labels[0]
-        # complexity_score = self._compute_complexity(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
-        metricsRes = self._compute_metrics(input_imgs=images, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label, metrics=self.metrics)
-        print(metricsRes)
-        #faithfulness_score = self._compute_faithfulness(input_imgs=input_imgs, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label)
+        if self.metrics is not [] and self.metrics is not None:
+            metricsRes = self._compute_metrics(input_imgs=images, model=ClassifierWrapper(model_manager.inference), explanation=explanation, label=top_label, metrics=self.metrics)
+            print(metricsRes)
         
         self.explanation = explanation
         self.explanation_images = input_imgs
@@ -588,8 +507,8 @@ if __name__ == '__main__':
     
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
     # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
-    # segmenter = segmentationWrapper('default')
-    segmenter = segmentationWrapper('sam', None, {})
+    segmenter = segmentationWrapper('default')
+    # segmenter = segmentationWrapper('sam', None, {})
     
     TStart = time.time()
 
@@ -601,7 +520,7 @@ if __name__ == '__main__':
         model_manager,
         dm,
         segmenter,
-        num_samples=120
+        num_samples=20000
     )
     explainer.show_explanation()
 
