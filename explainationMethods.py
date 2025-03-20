@@ -543,7 +543,7 @@ class MainExplainer:
             activations[:, i, :, :] *= pooled_gradients[i]
 
         heatmap = torch.mean(activations, dim=1).squeeze()
-        heatmap = np.maximum(heatmap, 0)
+        heatmap = torch.tensor(np.maximum(heatmap.cpu().numpy(), 0))
 
         # normalize the heatmap
         heatmap /= torch.max(heatmap)
