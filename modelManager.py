@@ -78,33 +78,33 @@ class ModelManager:
                 loss = criterion(outputs, labels)
         return loss.item()
     
-    def accuracy(self, loader):
-        self.model.eval()
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for images, labels in loader:
-                images, labels = images.to(self.device), labels.to(self.device)
-                outputs = self.model(images)
+    # def accuracy(self, loader):
+    #     self.model.eval()
+    #     correct = 0
+    #     total = 0
+    #     with torch.no_grad():
+    #         for images, labels in loader:
+    #             images, labels = images.to(self.device), labels.to(self.device)
+    #             outputs = self.model(images)
                 
-                if self.numClass == 1 or (self.numClass == 2 and labels.shape[1] == 1):
-                    # Binary classification single output
-                    predicted = (torch.sigmoid(outputs) > 0.5).float()
-                    total += labels.size(0)
-                elif self.numClass == 2 and labels.shape[1] == 2:
-                    # Binary two outputs
-                    predicted = (torch.sigmoid(outputs) > 0.5).float()
-                    total += labels.size(0) * labels.size(1)
-                else:
-                    # Multi-class
-                    _, predicted = torch.max(outputs.data, 1)
-                    if labels.dim() > 1:  
-                        _, labels = torch.max(labels.data, 1)
-                    total += labels.size(0)
+    #             if self.numClass == 1 or (self.numClass == 2 and labels.shape[1] == 1):
+    #                 # Binary classification single output
+    #                 predicted = (torch.sigmoid(outputs) > 0.5).float()
+    #                 total += labels.size(0)
+    #             elif self.numClass == 2 and labels.shape[1] == 2:
+    #                 # Binary two outputs
+    #                 predicted = (torch.sigmoid(outputs) > 0.5).float()
+    #                 total += labels.size(0) * labels.size(1)
+    #             else:
+    #                 # Multi-class
+    #                 _, predicted = torch.max(outputs.data, 1)
+    #                 if labels.dim() > 1:  
+    #                     _, labels = torch.max(labels.data, 1)
+    #                 total += labels.size(0)
                 
-                correct += (predicted == labels).sum().item()
+    #             correct += (predicted == labels).sum().item()
         
-        return correct / total if total > 0 else 0
+    #     return correct / total if total > 0 else 0
 
     def accuracy(self, loader, f1_recall=False):
         self.model.eval()
