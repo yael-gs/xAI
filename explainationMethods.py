@@ -37,8 +37,8 @@ class SAMSegmentationMasker:
 
 
 class MainExplainer:
-    def __init__(self, explainationMethod, metrics=['ROAD']):
-        assert explainationMethod in ['lime','shap','gradcam'], "Explaination method not supported"
+    def __init__(self, explainationMethod, metrics=[]):
+        assert explainationMethod in ['lime', 'shap', 'gradcam'], "Explaination method not supported"
         self.explainationMethod = explainationMethod
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.metrics = metrics
@@ -140,49 +140,57 @@ class MainExplainer:
         if isinstance(metrics, str):
             metrics = [metrics]
         final_metric = {}
-
-        # print("input_imgs.shape in _compute_metrics:", input_imgs.shape)
-        if self.explainationMethod == 'shap':
-            top_label = 1
+        if self.explainationMethod == 'gradcam':
+            #TODO : Prepare for metrics
+            explain_resized = cv2.resize(
+                explanation,
+                (input_imgs.shape[2], input_imgs.shape[1]),
+                interpolation=cv2.INTER_NEAREST
+            )
+            
         else:
-            top_label = explanation.top_labels[0]
+            # print("input_imgs.shape in _compute_metrics:", input_imgs.shape)
+            if self.explainationMethod == 'shap':
+                top_label = 1
+            else:
+                top_label = explanation.top_labels[0]
 
-        _, positive_mask = explanation.get_image_and_mask(
-            label=top_label,
-            positive_only=True,
-            num_features=5,
-            hide_rest=False
-        )
-        
-        # print("Positive mask shape:", positive_mask.shape)
-        assert positive_mask.ndim == 2, f"Expected 2D mask but got shape {positive_mask.shape}"
-        
-        if input_imgs.ndim == 4:
-            img_height = input_imgs.shape[1]
-            img_width = input_imgs.shape[2]
-        else:
-            img_height = input_imgs.shape[0]
-            img_width = input_imgs.shape[1]
-            input_imgs = np.expand_dims(input_imgs, axis=0)
-        
-        positive_mask_resized = cv2.resize(
-            positive_mask.astype(np.float64), 
-            (img_width, img_height), 
-            interpolation=cv2.INTER_NEAREST
-        )
-        
+            _, positive_mask = explanation.get_image_and_mask(
+                label=top_label,
+                positive_only=True,
+                num_features=5,
+                hide_rest=False
+            )
+            
+            # print("Positive mask shape:", positive_mask.shape)
+            assert positive_mask.ndim == 2, f"Expected 2D mask but got shape {positive_mask.shape}"
+            
+            if input_imgs.ndim == 4:
+                img_height = input_imgs.shape[1]
+                img_width = input_imgs.shape[2]
+            else:
+                img_height = input_imgs.shape[0]
+                img_width = input_imgs.shape[1]
+                input_imgs = np.expand_dims(input_imgs, axis=0)
+            
+            explain_resized = cv2.resize(
+                positive_mask.astype(np.float64), 
+                (img_width, img_height), 
+                interpolation=cv2.INTER_NEAREST
+            )
+            
         # print("Positive mask resized shape:", positive_mask_resized.shape)
         # print("Final input_imgs shape:", input_imgs.shape)
-
         x_batch = np.transpose(input_imgs, (0, 3, 1, 2))
         y_batch = np.array([label])
-        a_batch = np.expand_dims(positive_mask_resized, axis=0)
+        a_batch = np.expand_dims(explain_resized, axis=0)
         a_batch = np.expand_dims(a_batch, axis=1)
         print(label)
         # print('y_batch shape:', y_batch.shape)
         # print('y_batch:', y_batch)
         # print("x_batch shape:", x_batch.shape)  # Should be (1, 3, H, W)
         # print("a_batch shape:", a_batch.shape)  # Should be (1, 1, H, W)
+
         for metric_name in metrics:
             print('Running:', metric_name)
             MetricClass, metric_params = self._verify_valid_metric(metric_name)
@@ -489,7 +497,6 @@ class MainExplainer:
         images = np.expand_dims(images, axis=0)
         image = images[0]
 
-        # Check if image is numpy array and convert to tensor if needed
         if isinstance(image, np.ndarray):
             # Handle numpy arrays - check dimensions
             if image.ndim == 3:  # Single image with channels
@@ -555,12 +562,13 @@ class MainExplainer:
             ]
 
         def forward(x):
-            for layer in layers_before: x = layer(x)
+            for layer in layers_before:
+                x = layer(x)
+                x.requires_grad_() # seems to do nothing
+                x.register_hook(self._activations_hook)
 
-            x.requires_grad_()
-            h = x.register_hook(self._activations_hook)
-
-            for layer in layers_after: x = layer(x)
+            for layer in layers_after:
+                x = layer(x)
 
             return x
 
@@ -575,8 +583,9 @@ class MainExplainer:
         pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
 
         x = image
-        for layer in layers_before: x = layer(x)
-        activations = x.detach()
+        for layer in layers_before:
+            x = layer(x)
+            activations = x.detach()
 
         for i in range(activations.size(1)):
             activations[:, i, :, :] *= pooled_gradients[i]
@@ -587,7 +596,23 @@ class MainExplainer:
         # normalize the heatmap
         heatmap /= torch.max(heatmap)
 
-        self.explanation = heatmap.squeeze()
+        class ClassifierWrapper(torch.nn.Module):
+            def __init__(self, classifier_fn):
+                super(ClassifierWrapper, self).__init__()
+                self.classifier_fn = classifier_fn
+                self.eval()
+
+            def forward(self, x):
+                return self.classifier_fn(x, metricsStyle=True)
+        fexplanation = heatmap.squeeze().numpy()
+        print('HM:', type(fexplanation), fexplanation.shape)
+        
+        top_label = index.item()
+        if self.metrics is not [] and self.metrics is not None:
+            metricsRes = self._compute_metrics(input_imgs=images, model=ClassifierWrapper(model_manager.inference), explanation=fexplanation, label=top_label, metrics=self.metrics)
+            print(metricsRes)
+
+        self.explanation = fexplanation
         self.explanation_images = input_imgs
 
         return heatmap
@@ -600,7 +625,7 @@ class MainExplainer:
             original_image = self.explanation_images
 
         size = (original_image.shape[1], original_image.shape[0])
-        heatmap = cv2.resize(explanation.numpy(), size)
+        heatmap = cv2.resize(explanation, size)
         heatmap = np.uint8(255 * heatmap)
         heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_HOT)
         heatmap = cv2.cvtColor(heatmap, cv2.COLOR_RGB2BGR)
@@ -625,11 +650,6 @@ class MainExplainer:
 
         plt.tight_layout()
         plt.show()
-
-
-# Exemple d'appel (à adapter selon votre contexte) :
-# complexity = compute_complexity(input_imgs, model, transformLime, segmentationModel, num_samples, label)
-
 
 
 class segmentationWrapper:
@@ -699,7 +719,7 @@ class segmentationWrapper:
                 elif rgb_image.shape[2] == 1:
                     rgb_image = np.repeat(rgb_image, 3, axis=-1)
 
-                if rgb_image.dtype == np.float32 or rgb_image.dtype == np.float64: #TODO: Vérifier si ça améliore pour lime
+                if rgb_image.dtype == np.float32 or rgb_image.dtype == np.float64:
                     rgb_image = (rgb_image * 255).astype(np.uint8)
 
                
@@ -847,7 +867,7 @@ if __name__ == '__main__':
     
     TStart = time.time()
 
-    explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    explainer = MainExplainer('gradcam', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
     # explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
     # explainer = MainExplainer('shap')
 
