@@ -10,7 +10,14 @@ class datasetManager:
     def __init__(self, dataset : int = 1, batch_size:int = 32, num_workers:int = 1, transform : T.Compose = None):
         self.dataset = dataset
         assert self.dataset in [0,1,2], "Dataset not found"
-
+        self.gt_msk_clr2cls = {
+            (0.0, 0.0, 0.0): "Background",
+            (0.01, 0.16, 0.26): "SE (Soft exudates)",
+            (0.07, 0.43, 0.38): "EX (Hard exudates)",
+            (0.24, 0.53, 0.77): "DO (Disc Optic)",
+            (0.81, 0.0, 0.0): "MA (Microaneurysms)",
+            (1.0, 0.72, 0.03): "HE (Hemorrhages)"
+        }
         self.batch_size = batch_size
         self.num_workers = num_workers
         #on ajoute le to Tensor pour les images

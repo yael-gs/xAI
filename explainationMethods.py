@@ -72,28 +72,42 @@ class MainExplainer:
         if self.explainationMethod == 'gradcam':
             self._show_explanation_gradcam(explanation, original_image, save)
             
-    def _compute_jaccard(self, input_imgs, explanation, ground_truth_mask):
-        top_label = explanation.top_labels[0]
-        _, positive_mask = explanation.get_image_and_mask(
-            label=top_label,
-            positive_only=True,
-            num_features=5,
-            hide_rest=False
-        )
+    def _compute_jaccard(self, input_imgs, explanation, ground_truth_mask, mapping_clr2cls: dict):
+        if self.explainationMethod == 'shap':
+            top_label = 1
+        else:
+            top_label = explanation.top_labels[0]
+
+        if self.explainationMethod == 'gradcam':
+            positive_mask_resized = cv2.resize(
+                explanation,
+                (input_imgs.shape[1], input_imgs.shape[0]),
+                interpolation=cv2.INTER_NEAREST
+            )
+        else:
+            _, positive_mask = explanation.get_image_and_mask(
+                label=top_label,
+                positive_only=True,
+                num_features=5,
+                hide_rest=False
+            )
+            
+            positive_mask_resized = cv2.resize(
+                positive_mask.astype(np.float64), 
+                (input_imgs.shape[1], input_imgs.shape[0]), 
+                interpolation=cv2.INTER_NEAREST
+            )
         
-        positive_mask_resized = cv2.resize(
-            positive_mask.astype(np.uint8), 
-            (input_imgs.shape[1], input_imgs.shape[0]), 
-            interpolation=cv2.INTER_NEAREST
-        )
-        
+        background_color = (0.0, 0.0, 0.0)
         # Extract unique labels from the ground truth mask (assumes shape is (H, W, 3))
         unique_labels = np.unique(ground_truth_mask.reshape(-1, ground_truth_mask.shape[2]), axis=0)
-        
+        unique_labels = np.array([lbl for lbl in unique_labels if not np.all(lbl == background_color)])
+
         # Precompute binary masks for each unique label only once
         masks = [np.all(ground_truth_mask == lbl, axis=-1) for lbl in unique_labels]
         
         max_jaccard = 0.0
+        best_combo = None
         
         # Iterate over all non-empty combinations of precomputed masks
         for r in range(1, len(unique_labels) + 1):
@@ -102,12 +116,45 @@ class MainExplainer:
                 union_mask = np.any(np.stack([masks[i] for i in combo], axis=0), axis=0)
                 
                 # Compute the Jaccard score (flattening the arrays for comparison)
-                jaccard = jaccard_score(positive_mask_resized.flatten(), union_mask.flatten(), average='binary')
+                jaccard = jaccard_score(positive_mask_resized.flatten(), union_mask.flatten(), average='binary') #FIXME : Problème avec les méthodes non binaires (autre que Lime)
                 
                 if jaccard > max_jaccard:
                     max_jaccard = jaccard
+                    best_combo = combo
 
-        return max_jaccard
+        # Display the labels corresponding to the best combination of sub masks
+        best_labels = []
+        for idx in best_combo:
+            # Extract color array from unique_labels
+            color_array = unique_labels[idx]
+            rounded_color = [np.floor(val * 100) / 100 for val in color_array]
+            rounded_color = list(rounded_color)
+            # Proper conversion: convert the NumPy array to a tuple for dictionary lookup
+            color_tuple = tuple(rounded_color)
+            label = mapping_clr2cls.get(color_tuple, "Unknown")
+            best_labels.append(label)
+        
+        overlap_proportions = {}
+        # Ensure the predicted mask is boolean for logical operations.
+        predicted_bool = positive_mask_resized.astype(bool)
+        for i, mask in enumerate(masks):
+            # Calculate the intersection between the ground truth submask and the predicted mask
+            intersection = np.logical_and(mask, predicted_bool)
+            submask_area = np.sum(mask)
+            if submask_area > 0:
+                proportion = np.sum(intersection) / submask_area
+            else:
+                proportion = np.nan  # or 0, depending on how you wish to handle empty masks.
+            
+            color_array = unique_labels[i]
+            rounded_color = [np.floor(val * 100) / 100 for val in color_array]
+            rounded_color = list(rounded_color)
+            # Proper conversion: convert the NumPy array to a tuple for dictionary lookup
+            color_tuple = tuple(rounded_color)
+            label = mapping_clr2cls.get(color_tuple, "Unknown")
+            overlap_proportions[label] = proportion
+        
+        return max_jaccard, best_labels, overlap_proportions
         
 
 
@@ -884,9 +931,9 @@ if __name__ == '__main__':
         segmenter,
         num_samples=1000
     )
-    explainer.show_explanation()
-    # ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
-    # print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask))
+    # explainer.show_explanation()
+    ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
+    print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls))
     
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
