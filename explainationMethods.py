@@ -38,7 +38,7 @@ class SAMSegmentationMasker:
 
 class MainExplainer:
     def __init__(self, explainationMethod, metrics=['ROAD']):
-        assert explainationMethod in ['lime','shap'], "Explaination method not supported"
+        assert explainationMethod in ['lime','shap','gradcam'], "Explaination method not supported"
         self.explainationMethod = explainationMethod
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.metrics = metrics
@@ -58,13 +58,19 @@ class MainExplainer:
                 segmenter,
                 num_samples=num_samples
             )
-
+        if self.explainationMethod == 'gradcam':
+            return self._explain_gradcam(model_input,
+                model_manager,
+                datasetManagerObject.transform,
+            )
     
     def show_explanation(self, explanation=None, original_image=None, save=True):
         if self.explainationMethod == 'lime':
             self._show_explanation_lime(explanation, original_image, save)
         if self.explainationMethod == 'shap':
             self._show_explanation_shap(explanation, original_image, save)
+        if self.explainationMethod == 'gradcam':
+            self._show_explanation_gradcam(explanation, original_image, save)
             
     def _compute_jaccard(self, input_imgs, explanation, ground_truth_mask):
         top_label = explanation.top_labels[0]
@@ -426,7 +432,160 @@ class MainExplainer:
         plt.show()
         
         return img_with_boundaries
+        
+    def _activations_hook(self, grad):
+        self.gradients = grad
 
+    def _explain_gradcam(self, input_imgs, model, transform):
+        images = input_imgs
+        if isinstance(images, np.ndarray):
+            images_pil = Image.fromarray(np.uint8(images))
+            images = transform(images_pil)
+            images = images.numpy()
+        else:
+            images = transform(images)
+            images = images.numpy()
+
+        images = np.transpose(images, (1, 2, 0))
+        images = np.expand_dims(images, axis=0)
+        image = images[0]
+
+        # Check if image is numpy array and convert to tensor if needed
+        if isinstance(image, np.ndarray):
+            # Handle numpy arrays - check dimensions
+            if image.ndim == 3:  # Single image with channels
+                image = torch.from_numpy(image).float()
+                # Ensure channels first format (C,H,W)
+                if image.shape[2] in [1, 3, 4]:  # If channels are last
+                    image = image.permute(2, 0, 1)
+                image = image.unsqueeze(0)  # Add batch dimension
+            elif image.ndim == 4:  # Batch of images
+                image = torch.from_numpy(image).float()
+                # Ensure channels first format (B,C,H,W)
+                if image.shape[3] in [1, 3, 4]:  # If channels are last
+                    image = image.permute(0, 3, 1, 2)
+        else:
+            # For PyTorch tensor
+            if image.dim() == 3:
+                image = image.unsqueeze(0)  # Add batch dimension
+
+        print('---------- Grad-CAM Explanation ----------')
+
+        image = image.to(self.device)
+
+        if model.modelType == "vgg16":
+            layers_before = [
+                model.model.features[:30]
+            ]
+
+            layers_after = [
+                model.model.features[30:],
+                model.model.avgpool,
+                lambda x: x.view((1, -1)),
+                model.model.classifier
+            ]
+
+        if model.modelType == "resnet50":
+            layers_before = [
+                model.model.conv1,
+                model.model.bn1,
+                model.model.maxpool,
+                model.model.layer1,
+                model.model.layer2,
+                model.model.layer3,
+                model.model.layer4
+            ]
+
+            layers_after = [
+                model.model.avgpool,
+                lambda x: x.view((1, -1)),
+                model.model.fc
+            ]
+
+        if model.modelType == "swinT":
+            layers_before = [
+                model.model.features,
+                model.model.norm,
+                model.model.permute
+            ]
+
+            layers_after = [
+                model.model.avgpool,
+                model.model.flatten,
+                model.model.head
+            ]
+
+        def forward(x):
+            for layer in layers_before: x = layer(x)
+
+            x.requires_grad_()
+            h = x.register_hook(self._activations_hook)
+
+            for layer in layers_after: x = layer(x)
+
+            return x
+
+        model.model.forward = forward
+
+        pred = model.model(image)
+        index = pred.argmax(dim=1)
+
+        pred[:, index].backward()
+        gradients = self.gradients
+
+        pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
+
+        x = image
+        for layer in layers_before: x = layer(x)
+        activations = x.detach()
+
+        for i in range(activations.size(1)):
+            activations[:, i, :, :] *= pooled_gradients[i]
+
+        heatmap = torch.mean(activations, dim=1).squeeze()
+        heatmap = np.maximum(heatmap, 0)
+
+        # normalize the heatmap
+        heatmap /= torch.max(heatmap)
+
+        self.explanation = heatmap.squeeze()
+        self.explanation_images = input_imgs
+
+        return heatmap
+
+    def _show_explanation_gradcam(self, explanation=None, original_image=None, save=True):
+        assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
+        if explanation is None:
+            explanation = self.explanation
+        if original_image is None and hasattr(self, 'explanation_images'):
+            original_image = self.explanation_images
+
+        size = (original_image.shape[1], original_image.shape[0])
+        heatmap = cv2.resize(explanation.numpy(), size)
+        heatmap = np.uint8(255 * heatmap)
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_HOT)
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_RGB2BGR)
+
+        image = 0.4 * heatmap.astype(np.float32) + 0.6 * original_image.astype(np.float32)
+        image = np.round(image).astype(np.uint8)
+
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.imshow(original_image)
+        plt.title("Original Image")
+        plt.axis('off')
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(image)
+        plt.title("Grad-CAM Explanation")
+        plt.axis('off')
+
+        if save:
+            h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
+            plt.savefig(f"shap_explanation_{h}.png")
+
+        plt.tight_layout()
+        plt.show()
 
 
 # Exemple d'appel (à adapter selon votre contexte) :
