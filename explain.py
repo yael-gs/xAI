@@ -49,7 +49,7 @@ with st.sidebar:
     xai_method = st.radio("Choose explanation method", ["lime", "shap", "gradcam"])
     
     st.subheader("Segmentation")
-    seg_method = st.radio("Choose segmentation method", ["default", "sam"])
+    seg_method = st.radio("Choose segmentation method", ["default", "sam", "grid"])
     
     sam_params = {}
     if seg_method == "sam":
@@ -193,8 +193,11 @@ if st.session_state.get('explanation_ready') and st.session_state.get('selected_
                 try:
                     if seg_method == "sam":
                         segmenter = segmentationWrapper('sam', sam_file, sam_params)
-                    else:
+                    elif seg_method == "default":
                         segmenter = segmentationWrapper('default')
+                    elif seg_method == "grid":
+                        segmenter = segmentationWrapper('grid')
+                    
                     explainer = MainExplainer(xai_method)
                     start_time = time.time()
                     explanation = explainer.explain(

@@ -258,11 +258,11 @@ class MainExplainer:
             explainer = shap.Explainer(classifier_fn, masker, output_names=['Mild','Severe'])
             shap_valuesf = explainer(images, max_evals=num_samples, batch_size=8, outputs=shap.Explanation.argsort.flip[:4])
         
-        if segmentationModel.segmentationModelType == 'sam':
+        if segmentationModel.segmentationModelType in ['sam', 'grid']:
             segmentation_fn = segmentationModel.segmentationModel
             masker = SAMSegmentationMasker(segmentation_fn, (images * 255).astype(np.uint8))
             nb_segments = masker.nb_segments
-            print(f"Nombre de segments SAM détectés : {nb_segments}")
+            print(f"Nombre de segments détectés : {nb_segments}")
             torch.cuda.empty_cache()
             explainer = shap.KernelExplainer(
                 lambda z: classifier_fn(masker.mask_image(z, images)),
@@ -275,7 +275,7 @@ class MainExplainer:
             
             shap_values = explainer.shap_values(
                 np.ones((1, nb_segments)),
-                nsamples=min(num_samples, 1000),
+                nsamples=min(num_samples, 500),
             )
 
             if isinstance(shap_values, list):
@@ -332,17 +332,23 @@ class MainExplainer:
         print("Image shape:", img.shape)
         img = img[0]
 
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)
-        plt.imshow(original_image)
-        plt.title("Original Image")
-        plt.axis('off')
-        plt.subplot(1, 2, 2)
-        plt.imshow(img)
-        plt.imshow(mask, cmap='hot', alpha=0.7)
-        plt.title("SHAP Explanation")
-        plt.legend()
-        plt.axis('off')
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        axes[0].imshow(original_image)
+        axes[0].set(
+            title="Original Image",
+            xticks=[],
+            yticks=[],
+        )
+        
+        axes[1].imshow(img)
+        im = axes[1].imshow(mask, cmap='hot', alpha=0.7)
+        fig.colorbar(im, ax=axes[1])
+        axes[1].set(
+            title="SHAP Explanation",
+            xticks=[],
+            yticks=[],
+        )
             
         if save:
             h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
@@ -401,8 +407,8 @@ class MainExplainer:
                 hide_color=0,
                 num_samples=num_samples,
             )
-        if segmentationModel.segmentationModelType == 'sam':
-             explanation = explainerObject.explain_instance(
+        if segmentationModel.segmentationModelType in ['sam', 'grid']:
+            explanation = explainerObject.explain_instance(
                 images,
                 classifier_fn,
                 top_labels=2,
@@ -410,6 +416,7 @@ class MainExplainer:
                 num_samples=num_samples,
                 segmentation_fn=segmentationModel.segmentationModel,
             )
+        
         
         class ClassifierWrapper(torch.nn.Module):
             def __init__(self, classifier_fn):
@@ -483,7 +490,7 @@ class MainExplainer:
     def _activations_hook(self, grad):
         self.gradients = grad
 
-    def _explain_gradcam(self, input_imgs, model, transform):
+    def _explain_gradcam(self, input_imgs, model_manager, transform):
         images = input_imgs
         if isinstance(images, np.ndarray):
             images_pil = Image.fromarray(np.uint8(images))
@@ -519,46 +526,46 @@ class MainExplainer:
 
         image = image.to(self.device)
 
-        if model.modelType == "vgg16":
+        if model_manager.modelType == "vgg16":
             layers_before = [
-                model.model.features[:30]
+                model_manager.model.features[:30]
             ]
 
             layers_after = [
-                model.model.features[30:],
-                model.model.avgpool,
+                model_manager.model.features[30:],
+                model_manager.model.avgpool,
                 lambda x: x.view((1, -1)),
-                model.model.classifier
+                model_manager.model.classifier
             ]
 
-        if model.modelType == "resnet50":
+        if model_manager.modelType == "resnet50":
             layers_before = [
-                model.model.conv1,
-                model.model.bn1,
-                model.model.maxpool,
-                model.model.layer1,
-                model.model.layer2,
-                model.model.layer3,
-                model.model.layer4
+                model_manager.model.conv1,
+                model_manager.model.bn1,
+                model_manager.model.maxpool,
+                model_manager.model.layer1,
+                model_manager.model.layer2,
+                model_manager.model.layer3,
+                model_manager.model.layer4
             ]
 
             layers_after = [
-                model.model.avgpool,
+                model_manager.model.avgpool,
                 lambda x: x.view((1, -1)),
-                model.model.fc
+                model_manager.model.fc
             ]
 
-        if model.modelType == "swinT":
+        if model_manager.modelType == "swinT":
             layers_before = [
-                model.model.features,
-                model.model.norm,
-                model.model.permute
+                model_manager.model.features,
+                model_manager.model.norm,
+                model_manager.model.permute
             ]
 
             layers_after = [
-                model.model.avgpool,
-                model.model.flatten,
-                model.model.head
+                model_manager.model.avgpool,
+                model_manager.model.flatten,
+                model_manager.model.head
             ]
 
         def forward(x):
@@ -572,9 +579,9 @@ class MainExplainer:
 
             return x
 
-        model.model.forward = forward
+        model_manager.model.forward = forward
 
-        pred = model.model(image)
+        pred = model_manager.model(image)
         index = pred.argmax(dim=1)
 
         pred[:, index].backward()
@@ -646,7 +653,7 @@ class MainExplainer:
 
         if save:
             h = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
-            plt.savefig(f"shap_explanation_{h}.png")
+            plt.savefig(f"gradcam_explanation_{h}.png")
 
         plt.tight_layout()
         plt.show()
@@ -860,23 +867,22 @@ if __name__ == '__main__':
         'points_per_side': 12
     }
     
-    # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth', samParams)
-    # segmenter = segmentationWrapper('sam', 'sam_vit_b_01ec64.pth')
-    # segmenter = segmentationWrapper('default')
-    segmenter = segmentationWrapper('sam', None, {})
+    segmenter = segmentationWrapper('default')
+    # segmenter = segmentationWrapper('sam', None, {})
+    # segmenter = segmentationWrapper('grid')
     
     TStart = time.time()
 
-    explainer = MainExplainer('gradcam', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    # explainer = MainExplainer('gradcam', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
     # explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
-    # explainer = MainExplainer('shap')
+    explainer = MainExplainer('shap', metrics = ['ROAD', 'COMPLEXITY'])
 
     explanation = explainer.explain(
         model_input,
         model_manager,
         dm,
         segmenter,
-        num_samples=4000
+        num_samples=1000
     )
     explainer.show_explanation()
     # ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
