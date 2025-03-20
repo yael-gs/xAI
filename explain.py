@@ -46,7 +46,7 @@ with st.sidebar:
     }
     
     st.subheader("Explanation Method")
-    xai_method = st.radio("Choose explanation method", ["lime", "shap"])
+    xai_method = st.radio("Choose explanation method", ["lime", "shap", "gradcam"])
     
     st.subheader("Segmentation")
     seg_method = st.radio("Choose segmentation method", ["default", "sam"])
