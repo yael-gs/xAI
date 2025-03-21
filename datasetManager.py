@@ -130,14 +130,18 @@ class datasetManager:
         
         if not rawImage:
             images = torch.stack(images)
+            
         if return_labels and not retrun_id:
             result = (images, retinopathy_labels, edema_labels)
         else:
-            result = images
+            result = images   # <-- Dans l'ancien code, on en arrivait ici
+                            #     même quand return_id=True si return_labels=False
+
         if return_labels and retrun_id:
             result = (images, retinopathy_labels, edema_labels, sample_rows["id"].values)
-        
+
         return result
+        
     
     def get_random_samples(self, n_samples=5,split='all'):
         return self.get_sample_by_class(split=split, n_samples=n_samples)

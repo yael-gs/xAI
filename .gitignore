@@ -6,3 +6,4 @@ notebook-test.ipynb
 *.pth
 *.png
 *.pt
+*.pkl

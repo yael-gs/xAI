@@ -17,6 +17,7 @@ from quantus.metrics import Complexity, FaithfulnessEstimate
 import quantus
 from sklearn.metrics import jaccard_score
 from itertools import combinations
+import pandas as pd
 
 class SAMSegmentationMasker:
     def __init__(self, segmentation_fn, image):
@@ -43,25 +44,28 @@ class MainExplainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.metrics = metrics
 
-    def explain(self, model_input, model_manager, datasetManagerObject, segmenter, num_samples=1000):
+    def explain(self, model_input, model_manager, datasetManagerObject, segmenter, num_samples=1000, return_metrics=False):
         if self.explainationMethod == 'lime':
             return self._explain_lime(model_input,
                 model_manager,
                 datasetManagerObject.transform,
                 segmenter,
-                num_samples=num_samples
+                num_samples=num_samples,
+                return_metrics=return_metrics
             )
         if self.explainationMethod == 'shap':
             return self._explain_shap(model_input,
                 model_manager,
                 datasetManagerObject.transform,
                 segmenter,
-                num_samples=num_samples
+                num_samples=num_samples,
+                return_metrics=return_metrics
             )
         if self.explainationMethod == 'gradcam':
             return self._explain_gradcam(model_input,
                 model_manager,
                 datasetManagerObject.transform,
+                return_metrics=return_metrics
             )
     
     def show_explanation(self, explanation=None, original_image=None, save=True):
@@ -167,12 +171,13 @@ class MainExplainer:
         }
         metricsParams = {
             "ROAD": {
-                "noise":0.07,
+                "noise": 0.1,
                 "percentages":list(range(1, 51, 1)),
                 "display_progressbar":True
             },
             'FAITHFULNESS' : {
-                'perturb_func' : quantus.uniform_noise
+                #'perturb_func' : quantus.uniform_noise,
+                'features_in_step' : 8
             }
         }
         needGT = ['AUC'] #TODO Implémenter pour les segmentation Ground Truth
@@ -266,7 +271,7 @@ class MainExplainer:
         return final_metric
 
 
-    def _explain_shap(self, input_imgs, model_manager, transformShap, segmentationModel, num_samples):
+    def _explain_shap(self, input_imgs, model_manager, transformShap, segmentationModel, num_samples, return_metrics=False):
         def classifier_fn(input_batch):
             output = model_manager.inference(input_batch)
             if output.ndim == 4:
@@ -357,7 +362,8 @@ class MainExplainer:
         
         self.explanation = wrapped_explanation
         self.explanation_images = input_imgs
-        
+        if return_metrics:
+            return wrapped_explanation, metricsRes
         return wrapped_explanation
 
     def _show_explanation_shap(self, explanation=None, original_image=None, save=True):
@@ -430,7 +436,7 @@ class MainExplainer:
         else:
             plt.title("SHAP values (segments not available)")
     
-    def _explain_lime(self, input_imgs, model_manager : ModelManager, transformLime, segmentationModel, num_samples):
+    def _explain_lime(self, input_imgs, model_manager : ModelManager, transformLime, segmentationModel, num_samples, return_metrics=False):
         def classifier_fn(input_batch):
             out = model_manager.inference(input_batch)
             return out
@@ -481,6 +487,8 @@ class MainExplainer:
         
         self.explanation = explanation
         self.explanation_images = input_imgs
+        if return_metrics:
+            return explanation, metricsRes
         return explanation
 
     def _show_explanation_lime(self, explanation=None, original_image=None, save=True):
@@ -537,7 +545,7 @@ class MainExplainer:
     def _activations_hook(self, grad):
         self.gradients = grad
 
-    def _explain_gradcam(self, input_imgs, model_manager, transform):
+    def _explain_gradcam(self, input_imgs, model_manager, transform, return_metrics=False):
         images = input_imgs
         if isinstance(images, np.ndarray):
             images_pil = Image.fromarray(np.uint8(images))
@@ -668,7 +676,8 @@ class MainExplainer:
 
         self.explanation = fexplanation
         self.explanation_images = input_imgs
-
+        if return_metrics :
+            return heatmap, metricsRes
         return heatmap
 
     def _show_explanation_gradcam(self, explanation=None, original_image=None, save=True):
@@ -887,6 +896,7 @@ class ShapExplanationWrapper:
         return self.original_image, shap_map
 
 if __name__ == '__main__':
+    """
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True, retrun_id=True, return_labels=True, split='test')
@@ -933,9 +943,47 @@ if __name__ == '__main__':
     )
     # explainer.show_explanation()
     ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
-    print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls))
+    if explainer.explainationMethod == 'lime' :
+        print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls))
     
     TFinish = time.time()
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
     # explainer.show_explanation()
+    """
+    import os
+    results = []
+    model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
+    segmenter = segmentationWrapper('default')
+    explainer = MainExplainer('lime', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    
+    dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
+    n_samples = len(os.listdir('dataset/test/images'))
+    print(n_samples)
+    model_inputs = dm.get_sample_by_class(n_samples=n_samples, rawImage=True, retrun_id=True, return_labels=True, split='test')
+    for k in range(len(model_inputs[-1])):
+        model_input = model_inputs[0][k]
+        image_id = model_inputs[3][k]
+        label = model_inputs[2][k]
+        print(image_id)
+        explanation, metricRes = explainer.explain(
+            model_input,
+            model_manager,
+            dm,
+            segmenter,
+            num_samples=1000,
+            return_metrics=True
+        )
+        ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
+        if explainer.explainationMethod == 'lime' :
+            max_jaccard, best_labels, overlap_proportions = explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls)
+        
+        results.append([image_id, label, metricRes, (max_jaccard, best_labels, overlap_proportions)])
+        print("#############")
+    
+    import pickle as pkl
+    print(results)
+    with open('results_lime.pkl', 'wb') as f:
+        pkl.dump(results, f)
+        f.close()
+    
