@@ -896,7 +896,6 @@ class ShapExplanationWrapper:
         return self.original_image, shap_map
 
 if __name__ == '__main__':
-    """
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
     model_input = dm.get_sample_by_class(n_samples=1, rawImage=True, retrun_id=True, return_labels=True, split='test')
@@ -932,7 +931,7 @@ if __name__ == '__main__':
 
     # explainer = MainExplainer('gradcam', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
     # explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
-    explainer = MainExplainer('shap', metrics = ['ROAD', 'COMPLEXITY'])
+    explainer = MainExplainer('lime', metrics = ['ROAD', 'COMPLEXITY'])
 
     explanation = explainer.explain(
         model_input,
@@ -950,6 +949,5 @@ if __name__ == '__main__':
     print(f"Time taken: {TFinish - TStart:.2f} seconds")
     print(explanation)
     # explainer.show_explanation()
-    """
     
     

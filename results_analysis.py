@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 ##### LIME results
 
-with open('results_lime.pkl', 'rb') as f:
+with open('results_lime_grid.pkl', 'rb') as f:
     results = pkl.load(f)
     f.close()
 

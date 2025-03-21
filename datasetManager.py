@@ -142,6 +142,70 @@ class datasetManager:
 
         return result
         
+    def get_sample_by_ID(self, LIndex=[], split='all', retinopathy_class=None, edema_class=None, return_labels=False, rawImage=False, retrun_id=False):
+        assert split in ['train', 'test','all'], "Split must be 'train' or 'test'"
+        df = self.dfTrain if split == 'train' else self.dfTest
+        img_dir = self.train_img_dir if split == 'train' else self.test_img_dir
+        if split == 'all':
+            df = pd.concat([self.dfTrain, self.dfTest], ignore_index=True)
+            indexTrain = [0]*len(self.dfTrain)
+            indexTest = [1]*len(self.dfTest)
+            df["split"] = indexTrain + indexTest
+            img_dir = "dataset"
+        
+        filtered_df = df.copy()
+        if retinopathy_class is not None:
+            filtered_df = filtered_df[filtered_df['retinopathy_grade'] == retinopathy_class]
+        if edema_class is not None:
+            filtered_df = filtered_df[filtered_df['risk_of_macular_edema'] == edema_class]
+            
+        if len(filtered_df) == 0:
+            Warning("No samples found for the given class")
+            return []
+            
+        sample_rows = filtered_df[filtered_df['id'].isin(LIndex)]
+        
+        if len(sample_rows) == 0:
+            Warning("No samples found with the given IDs")
+            return []
+            
+        
+        images = []
+        retinopathy_labels = []
+        edema_labels = []
+        
+        for _, row in sample_rows.iterrows():
+            if split == 'all':
+                img_dir = "dataset/train/images" if row["split"] == 0 else "dataset/test/images"
+            img_path = os.path.join(img_dir, (row['id'] + ".jpg"))
+            image = Image.open(img_path).convert("RGB")
+            retinopathy_grade = "Severe" if row['retinopathy_grade'] == 1 else "Mild"
+            edema_risk = "High" if row['risk_of_macular_edema'] == 1 else "Low"
+            
+            if not rawImage and self.transform:
+                image = self.transform(image)
+            elif rawImage:
+                image = np.array(image)
+            
+            images.append(image)
+            
+            if return_labels:
+                retinopathy_labels.append(retinopathy_grade)
+                edema_labels.append(edema_risk)
+        
+        if not rawImage:
+            images = torch.stack(images)
+            
+        if return_labels and not retrun_id:
+            result = (images, retinopathy_labels, edema_labels)
+        else:
+            result = images   # <-- Dans l'ancien code, on en arrivait ici
+                            #     même quand return_id=True si return_labels=False
+
+        if return_labels and retrun_id:
+            result = (images, retinopathy_labels, edema_labels, sample_rows["id"].values)
+
+        return result
     
     def get_random_samples(self, n_samples=5,split='all'):
         return self.get_sample_by_class(split=split, n_samples=n_samples)
