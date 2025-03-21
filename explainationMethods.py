@@ -677,8 +677,8 @@ class MainExplainer:
         self.explanation = fexplanation
         self.explanation_images = input_imgs
         if return_metrics :
-            return heatmap, metricsRes
-        return heatmap
+            return fexplanation, metricsRes
+        return fexplanation
 
     def _show_explanation_gradcam(self, explanation=None, original_image=None, save=True):
         assert explanation is not None or hasattr(self, 'explanation'), "No explanation provided"
