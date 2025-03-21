@@ -111,7 +111,7 @@ class MainExplainer:
         masks = [np.all(ground_truth_mask == lbl, axis=-1) for lbl in unique_labels]
         
         max_jaccard = 0.0
-        best_combo = None
+        best_combo = []
         
         # Iterate over all non-empty combinations of precomputed masks
         for r in range(1, len(unique_labels) + 1):
@@ -120,7 +120,8 @@ class MainExplainer:
                 union_mask = np.any(np.stack([masks[i] for i in combo], axis=0), axis=0)
                 
                 # Compute the Jaccard score (flattening the arrays for comparison)
-                jaccard = jaccard_score(positive_mask_resized.flatten(), union_mask.flatten(), average='binary') #FIXME : Problème avec les méthodes non binaires (autre que Lime)
+                jaccard = jaccard_score(positive_mask_resized.flatten(), union_mask.flatten(), average='binary') 
+                #FIXME : Problème avec les méthodes non binaires (autre que Lime)
                 
                 if jaccard > max_jaccard:
                     max_jaccard = jaccard
@@ -193,7 +194,6 @@ class MainExplainer:
             metrics = [metrics]
         final_metric = {}
         if self.explainationMethod == 'gradcam':
-            #TODO : Prepare for metrics
             explain_resized = cv2.resize(
                 explanation,
                 (input_imgs.shape[2], input_imgs.shape[1]),
