@@ -7,3 +7,5 @@ notebook-test.ipynb
 *.png
 *.pt
 *.pkl
+*.csv
+*.zip

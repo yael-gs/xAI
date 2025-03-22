@@ -2,9 +2,8 @@ import pickle as pkl
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-##### LIME results
 
-with open('results_lime_grid.pkl', 'rb') as f:
+with open('SwinT/results_lime_grid.pkl', 'rb') as f:
     results = pkl.load(f)
     f.close()
 

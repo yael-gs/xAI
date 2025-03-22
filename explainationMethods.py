@@ -624,14 +624,14 @@ class MainExplainer:
             ]
 
         def forward(x):
-            for layer in layers_before:
+            for i, layer in enumerate(layers_before):
                 x = layer(x)
-                x.requires_grad_() # seems to do nothing
-                x.register_hook(self._activations_hook)
-
+                if i == len(layers_before) - 1:
+                    x.requires_grad_()
+                    x.register_hook(self._activations_hook)
+                    self.activations = x
             for layer in layers_after:
                 x = layer(x)
-
             return x
 
         model_manager.model.forward = forward
@@ -641,22 +641,16 @@ class MainExplainer:
 
         pred[:, index].backward()
         gradients = self.gradients
+        activations = self.activations.detach()
 
         pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-
-        x = image
-        for layer in layers_before:
-            x = layer(x)
-            activations = x.detach()
 
         for i in range(activations.size(1)):
             activations[:, i, :, :] *= pooled_gradients[i]
 
         heatmap = torch.mean(activations, dim=1).squeeze()
         heatmap = torch.tensor(np.maximum(heatmap.cpu().numpy(), 0))
-
-        # normalize the heatmap
-        heatmap /= torch.max(heatmap)
+        heatmap /= torch.max(heatmap) + 1e-6
 
         class ClassifierWrapper(torch.nn.Module):
             def __init__(self, classifier_fn):
@@ -898,12 +892,13 @@ class ShapExplanationWrapper:
 if __name__ == '__main__':
     import time
     dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
-    model_input = dm.get_sample_by_class(n_samples=1, rawImage=True, retrun_id=True, return_labels=True, split='test')
+    # model_input = dm.get_sample_by_class(n_samples=1, rawImage=True, retrun_id=True, return_labels=True, split='test')
+    model_input = dm.get_sample_by_ID(LIndex=["IDRiD_012"], rawImage=True, retrun_id=True, return_labels=True, split='test')
     image_id = model_input[-1]
     image_id = image_id[0]
     print("Image ID : ",image_id)
     model_input = model_input[0][0]
-    model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
+    model_manager = ModelManager('swinT', 2, "swinT_model_(SIZE 224)_2025-03-06_13-35_3.pth")
     # samParams = {
     #     'min_mask_area': 5,
     #     'crop_n_layers': 2,
@@ -929,9 +924,9 @@ if __name__ == '__main__':
     
     TStart = time.time()
 
-    # explainer = MainExplainer('gradcam', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
+    explainer = MainExplainer('gradcam', metrics = ['ROAD', 'COMPLEXITY'])
     # explainer = MainExplainer('shap', metrics = ['ROAD', 'FAITHFULNESS', 'COMPLEXITY'])
-    explainer = MainExplainer('lime', metrics = ['ROAD', 'COMPLEXITY'])
+    # explainer = MainExplainer('lime', metrics = ['ROAD', 'COMPLEXITY'])
 
     explanation = explainer.explain(
         model_input,
@@ -940,7 +935,7 @@ if __name__ == '__main__':
         segmenter,
         num_samples=1000
     )
-    # explainer.show_explanation()
+    explainer.show_explanation()
     ground_truth_mask = dm.get_ground_segmentation(img_id=image_id, apply_transform=False)
     if explainer.explainationMethod == 'lime' :
         print("Jaccard index for bets sub masks combination : ", explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls))

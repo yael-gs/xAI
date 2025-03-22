@@ -6,7 +6,7 @@ from explainationMethods import MainExplainer, segmentationWrapper
 import torchvision.transforms as T
 
 
-USER = 'YAEL'
+USER = 'COCO'
 
 samParams = {
     'min_mask_region_area': 4,                  
@@ -33,7 +33,6 @@ AttributionDict = {
 Attribution = AttributionDict[USER]
 # Attribution = ('lime','grid') #Modifier ici pour custom 
 
-LIndex = ["IDRiD_012" , "IDRiD_020" , "IDRiD_027" , "IDRiD_028" , "IDRiD_029" , "IDRiD_048" , "IDRiD_053" , "IDRiD_057" , "IDRiD_058" , "IDRiD_059"]
 results = []
 model_manager = ModelManager('vgg16', 2, "vgg16_model_2025-03-06_13-28_3.pth")
 segmenter = segmentationWrapper(Attribution[1],params={'grid_size': (15, 15)} if Attribution[1] == 'grid' else (samParams if Attribution[1] == 'sam' else {}))
@@ -43,7 +42,7 @@ explainer = MainExplainer(Attribution[0], metrics = ['ROAD', 'FAITHFULNESS', 'CO
 dm = datasetManager(dataset=1, batch_size=8, num_workers=4, transform=T.Compose([T.Resize((224, 224))]))
 # n_samples = len(os.listdir('dataset/test/images'))
 # print(n_samples)
-model_inputs = dm.get_sample_by_ID(LIndex=LIndex, rawImage=True, retrun_id=True, return_labels=True, split='test')
+model_inputs = dm.get_sample_by_class(n_samples=62, rawImage=True, retrun_id=True, return_labels=True, split='test')
 for k in range(len(model_inputs[-1])):
     print(k/len(model_inputs[-1]))
     model_input = model_inputs[0][k]
@@ -62,7 +61,7 @@ for k in range(len(model_inputs[-1])):
     if explainer.explainationMethod == 'lime' :
         max_jaccard, best_labels, overlap_proportions = explainer._compute_jaccard(model_input, explanation, ground_truth_mask, dm.gt_msk_clr2cls)
     else:
-        max_jaccard, best_labels, overlap_proportions = 0, 0, 0
+        max_jaccard, best_labels, overlap_proportions = 0,  0,0
 
     results.append([image_id, label, metricRes, (max_jaccard, best_labels, overlap_proportions)])
     print("#############")
